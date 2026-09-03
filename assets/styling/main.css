@@ -1,0 +1,649 @@
+/* ── Theme variables — Porto de feathrai-frontend ─────────────────────────────
+   Mismo contrato que src/styles/themes/variables.css + data/themes.ts:
+   :root  = tema claro (valores efectivos que React aplica en runtime)
+   [data-theme="dark"] = tema oscuro
+   El atributo lo setea ThemeProvider (Rust) sobre <html>. */
+:root {
+  --primary-color: #00A3F0;
+  --secondary-color: #6c757d;
+  --success-color: #28a745;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #17a2b8;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #e9ecef;
+
+  --text-primary: #212529;
+  --text-secondary: #6c757d;
+  --text-muted: #adb5bd;
+  --text-inverse: #ffffff;
+
+  --border-color: #dee2e6;
+  --border-color-light: #f8f9fa;
+
+  --shadow-sm: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  --shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 1rem 3rem rgba(0, 0, 0, 0.175);
+
+  --table-header-bg: #f8f9fa;
+  --table-row-even: #ffffff;
+  --table-row-odd: #f9fafb;
+  --table-hover: #f1f3f5;
+  --card-bg: #ffffff;
+  --card-border: #e5e7eb;
+}
+
+/* ── Dark theme (VS Code-ish, igual al de feathrai-frontend) ── */
+[data-theme="dark"] {
+  --primary-color: #00A3F0;
+  --secondary-color: #6c757d;
+  --success-color: #198754;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #0dcaf0;
+
+  --bg-primary: #212529;
+  --bg-secondary: #343a40;
+  --bg-tertiary: #495057;
+
+  --text-primary: #ffffff;
+  --text-secondary: #adb5bd;
+  --text-muted: #6c757d;
+  --text-inverse: #212529;
+
+  --border-color: #495057;
+  --border-color-light: #343a40;
+
+  --shadow-sm: 0 0.125rem 0.25rem rgba(255, 255, 255, 0.05);
+  --shadow: 0 0.5rem 1rem rgba(255, 255, 255, 0.1);
+  --shadow-lg: 0 1rem 3rem rgba(255, 255, 255, 0.125);
+
+  --table-header-bg: #343a40;
+  --table-row-even: #2b3035;
+  --table-row-odd: #212529;
+  --table-hover: #3a3f47;
+  --card-bg: #343a40;
+  --card-border: #495057;
+}
+
+/* ── Base (equivalente de index.css de feathrai-frontend) ── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+}
+
+h4,
+h5,
+h6 {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
+}
+
+/* Input del login — foco azul (FocusInput de LoginForm.tsx) */
+.feather-input:focus {
+  border-color: #00A3F0;
+  background-color: #ffffff;
+}
+
+/* ── Shell de layout (index.css) ── */
+.layout-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+}
+
+.layout-main-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  margin-left: 260px;
+  transition: margin-left 0.2s ease-in-out;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+/* Ajuste cuando el sidebar está colapsado */
+.app-sidebar.collapsed ~ .layout-container .layout-main-wrapper {
+  margin-left: 56px;
+}
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: var(--bg-primary);
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Sidebar (Sidebar.css de feathrai-frontend) ── */
+.app-sidebar {
+  position: fixed;
+  left: 0;
+  top: 2.5rem;
+  height: calc(100vh - 7.5rem);
+  background-color: var(--card-bg, #fff);
+  border-right: 1px solid var(--card-border, #e2e8f0);
+  transition: width 0.2s ease-in-out;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.app-sidebar.expanded {
+  width: 260px;
+}
+
+.app-sidebar.collapsed:not(.pinned) {
+  width: 56px;
+}
+
+.app-sidebar.collapsed .app-sidebar-title {
+  display: none;
+}
+
+.app-sidebar.collapsed .app-sidebar-item-text {
+  display: none;
+}
+
+.app-sidebar.collapsed .app-sidebar-item-badge {
+  display: none;
+}
+
+.app-sidebar.collapsed .app-sidebar-section-title {
+  display: none;
+}
+
+.app-sidebar.collapsed .app-sidebar-item {
+  justify-content: center;
+  padding: 8px;
+}
+
+.app-sidebar.collapsed .app-sidebar-item i {
+  margin: 0;
+}
+
+.app-sidebar.collapsed .app-sidebar-subitem {
+  padding-left: 8px !important;
+}
+
+.app-sidebar.pinned {
+  width: 260px !important;
+}
+
+.app-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.625rem;
+  border-bottom: 1px solid var(--card-border, #e2e8f0);
+  background-color: var(--bg-secondary, #f8fafc);
+  min-height: 45px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.app-sidebar-header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-sidebar-toggle-btn {
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: var(--border-radius-sm, 4px);
+  cursor: pointer;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.app-sidebar-toggle-btn:hover {
+  background-color: var(--bg-tertiary, #e2e8f0);
+  color: var(--text-primary, #1e293b);
+}
+
+.app-sidebar-title {
+  display: flex;
+  align-items: center;
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 300;
+  font-size: 16px;
+  letter-spacing: 0.03em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-sidebar-title i {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.app-sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0;
+}
+
+.app-sidebar-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app-sidebar-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-sidebar-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+.app-sidebar-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.app-sidebar-section {
+  padding: 0 8px;
+  margin-bottom: 16px;
+}
+
+.app-sidebar-section-title {
+  padding: 12px 8px 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted, #94a3b8);
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-sidebar-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  margin: 1px 0;
+  border: none;
+  background: none;
+  border-radius: var(--border-radius-sm, 4px);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  text-align: left;
+  color: var(--text-primary, #1e293b);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-sidebar-item:hover {
+  background-color: var(--bg-tertiary, #e2e8f0);
+}
+
+.app-sidebar-item.active {
+  background-color: var(--primary-color, #3b82f6);
+  color: var(--text-inverse, #fff);
+}
+
+.app-sidebar-item i {
+  font-size: 18px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.app-sidebar-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar-item-badge {
+  background-color: var(--bg-tertiary, #e2e8f0);
+  color: var(--text-primary, #1e293b);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.app-sidebar-item.active .app-sidebar-item-badge {
+  background-color: var(--text-inverse, #fff);
+  color: var(--primary-color, #3b82f6);
+}
+
+/* Sub-items */
+.app-sidebar-subitems {
+  padding-left: 0;
+  margin: 2px 0;
+}
+
+.app-sidebar-subitem {
+  padding-left: 38px !important;
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.app-sidebar-subitem:hover {
+  opacity: 1;
+}
+
+.app-sidebar-subitem.active {
+  opacity: 1;
+  font-weight: 500;
+}
+
+.app-sidebar-subitem i {
+  font-size: 14px;
+}
+
+.app-sidebar-footer {
+  border-top: 1px solid var(--card-border, #e2e8f0);
+  padding: 12px;
+  background-color: var(--bg-secondary, #f8fafc);
+  position: relative;
+  z-index: 1001;
+}
+
+.app-sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.1);
+  z-index: 999;
+  display: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .app-sidebar {
+    top: 0;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .app-sidebar.expanded {
+    width: 280px;
+  }
+
+  .app-sidebar-overlay {
+    display: block;
+  }
+}
+
+/* ── ProjectsGrid (ProjectsGrid.css de feathrai-frontend) ── */
+.projects-grid-container,
+.tasks-grid-container {
+  --notion-row-padding: 8px 12px;
+  --notion-hover-bg: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="dark"] .projects-grid-container,
+[data-theme="dark"] .tasks-grid-container {
+  --notion-hover-bg: rgba(255, 255, 255, 0.05);
+}
+
+.projects-grid-header {
+  background-color: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+  border-radius: var(--border-radius-lg, 0.5rem) !important;
+}
+
+.project-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 10px;
+}
+
+.project-meta-item {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  padding: 3px 10px;
+  border-right: 1px solid var(--border-color);
+}
+
+.project-meta-item:first-child {
+  padding-left: 0;
+}
+
+.project-meta-item:last-child {
+  border-right: none;
+}
+
+.projects-grid-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+  background-color: var(--bg-secondary);
+  border-radius: 0 0 var(--border-radius-lg, 0.5rem) var(--border-radius-lg, 0.5rem);
+}
+
+.projects-grid-table.card,
+.tasks-grid-table.card {
+  background-color: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.projects-grid-table .table,
+.tasks-grid-table .table {
+  color: var(--text-primary) !important;
+  background-color: transparent !important;
+  --bs-table-bg: transparent !important;
+  --bs-table-color: var(--text-primary) !important;
+}
+
+.projects-grid-table .table-light,
+.tasks-grid-table .table-light {
+  --bs-table-bg: var(--table-header-bg) !important;
+  --bs-table-color: var(--text-primary) !important;
+  background-color: transparent !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.projects-grid-table .table-light th,
+.tasks-grid-table .table-light th {
+  font-weight: 500;
+  font-size: 0.875rem;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color) !important;
+  background-color: transparent !important;
+  color: var(--text-primary) !important;
+}
+
+.projects-grid-table tbody tr,
+.tasks-grid-table tbody tr {
+  --bs-table-bg: var(--card-bg) !important;
+  --bs-table-hover-bg: var(--table-hover) !important;
+  --bs-table-color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+  transition: all 0.15s ease;
+  background-color: var(--card-bg) !important;
+}
+
+.projects-grid-table tbody tr:hover,
+.tasks-grid-table tbody tr:hover {
+  --bs-table-bg: var(--table-hover) !important;
+  background-color: var(--table-hover) !important;
+}
+
+.projects-grid-table tbody tr td,
+.tasks-grid-table tbody tr td {
+  color: var(--text-primary) !important;
+}
+
+.notion-grid-row td {
+  padding: 8px 12px;
+  vertical-align: middle;
+  color: var(--text-primary) !important;
+}
+
+.template-notion .notion-grid-row {
+  border-radius: 3px;
+}
+
+.template-notion .notion-grid-row:hover {
+  background-color: var(--notion-hover-bg);
+}
+
+.notion-hover-actions {
+  display: flex;
+  gap: 4px;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--card-bg) !important;
+  padding: 2px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+}
+
+.notion-hover-actions .btn-ghost {
+  background: transparent !important;
+  border: none !important;
+  padding: 4px 8px;
+  color: var(--text-secondary) !important;
+  transition: all 0.15s ease;
+}
+
+.notion-hover-actions .btn-ghost:hover {
+  background: var(--table-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.projects-grid-table .form-control-sm,
+.tasks-grid-table .form-control-sm {
+  border: 1px solid var(--primary-color) !important;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.9375rem;
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.1);
+}
+
+.projects-grid-search .input-group-text {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+.projects-grid-search .form-control {
+  background-color: var(--bg-primary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.projects-grid-search .form-control:focus {
+  background-color: var(--bg-primary) !important;
+  border-color: var(--primary-color) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+/* ── ProjectDetail (ProjectDetail.css de feathrai-frontend) ── */
+.project-detail-layout {
+  padding: 0;
+}
+
+.btn-ghost-back {
+  background: none;
+  border: none;
+  padding: 6px 10px;
+  border-radius: var(--border-radius-sm, 4px);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-ghost-back:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.project-detail-header {
+  border-radius: var(--border-radius-lg, 0.5rem) !important;
+  background-color: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+}
+
+.project-section-header {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+  padding: 12px 16px;
+  transition: background-color 0.15s ease;
+}
+
+.project-section-header:hover {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.project-section-header h5 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+}
+
+.project-section-header .bi-chevron-up,
+.project-section-header .bi-chevron-down {
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
