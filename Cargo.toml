@@ -31,6 +31,13 @@ uuid = { version = "1", features = ["v4"] }
 # (salt generation en `services::auth`) vía unificación de features.
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+# NOTA (Windows): `wmi` (iroh -> netwatch) declara `windows` y `windows-core`
+# como rangos anchos e independientes (">=0.59, <0.63"); si Cargo los resuelve
+# en minors distintos el crate no compila ("multiple different versions of
+# crate `windows_core` in the dependency graph"). Cargo.lock los fija a
+# 0.62.2/0.62.2; al actualizar dependencias, revalidar en Windows con
+# `cargo check -p wmi --target x86_64-pc-windows-msvc`.
+
 [features]
 default = ["desktop"]
 # The feature that are only required for the web = ["dioxus/web"] build target should be optional and only enabled in the web = ["dioxus/web"] feature
