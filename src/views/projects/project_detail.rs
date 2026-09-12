@@ -41,6 +41,7 @@ pub fn ProjectDetail(
                     on_back_to_projects.call(());
                 },
                 on_update_task: move |t| on_update_task.call(t),
+                on_delete_task: move |id| on_delete_task.call(id),
             }
         };
     }
@@ -147,6 +148,7 @@ pub fn ProjectDetail(
                     on_add_task: move |_| on_add_task.call(()),
                     on_task_select: move |id| selected_task.set(Some(id)),
                     on_update_task: move |t| on_update_task.call(t),
+                    on_delete_task: move |id| on_delete_task.call(id),
                 }
             } else if view_mode() == ViewMode::Kanban {
                 KanbanBoard {

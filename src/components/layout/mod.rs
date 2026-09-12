@@ -14,4 +14,4 @@ mod state;
 mod user_menu;
 
 pub use app_layout::AppLayout;
-pub use state::{use_auth, AuthProvider, SidebarProvider, User};
+pub use state::{use_auth, AuthProvider, SidebarProvider};

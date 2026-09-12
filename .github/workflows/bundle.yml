@@ -1,0 +1,62 @@
+name: Bundles
+
+# Los instaladores no se pueden cross-compilar: cada job corre `dx bundle` en su
+# propio SO. Disparo manual o al pushear un tag `v*`.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dependencias del sistema (WebView + toolchain)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libxdo-dev libssl-dev librsvg2-dev
+
+      - name: Instalar dioxus-cli
+        # Compila el CLI (~10 min). Alternativa más rápida:
+        # curl -sSL https://dioxus.dev/install.sh | bash
+        run: cargo install dioxus-cli --locked
+
+      - name: Bundle
+        # `--package-types` acepta un valor por flag; hay que repetirla.
+        # Runner 22.04 (no 24.04): el tooling de AppImage necesita FUSE2.
+        run: dx bundle --platform desktop --package-types deb --package-types rpm --package-types appimage --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundles
+          path: target/dx/featherai/bundle/linux/
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Instalar dioxus-cli
+        run: cargo install dioxus-cli --locked
+
+      - name: Bundle
+        # NSIS y WiX los descarga dx (makensis.exe / candle.exe / light.exe).
+        run: dx bundle --platform desktop --package-types nsis --package-types msi --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundles
+          path: target/dx/featherai/bundle/windows/
+          if-no-files-found: error

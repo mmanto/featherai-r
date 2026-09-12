@@ -1,5 +1,9 @@
 [application]
 
+# Nombre de la app. El nombre del binario y de los instaladores sale de
+# `[package] name` en Cargo.toml (`prueba-1` → bundles "Prueba1").
+name = "featherai"
+
 [web.app]
 
 # HTML title tag content
@@ -19,3 +23,33 @@ script = []
 # Javascript code file
 # serve: [dev-server] only
 script = []
+
+# Metadatos de los instaladores (dx bundle). `identifier` es la identidad
+# reverse-DNS de la app en el SO (.deb/.rpm/.msi) y debe ser estable entre
+# releases: cambiarlo hace que el SO trate la nueva versión como otra app.
+[bundle]
+identifier = "com.featherai.app"
+publisher = "Martín Mantovani"
+version = "0.1.0"
+category = "Productivity"
+short_description = "Gestión de proyectos local-first"
+long_description = "Gestor de proyectos y tareas de escritorio con persistencia local-first (GuardianDB sobre Iroh)."
+copyright = "Copyright © 2026 Martín Mantovani"
+# Un solo icono por lista: con dos entradas (png + ico) el bundler de RPM
+# agrega dos veces el mismo destino `featherai.png` y falla. Linux/macOS usan
+# el PNG; Windows toma el ICO de `[bundle.windows]`.
+icon = ["assets/icons/icon.png"]
+
+[bundle.windows]
+icon_path = "assets/favicon.ico"
+
+# Depends del .deb: dioxus-cli no los deduce del binario. Son las libs que el
+# WebView del sistema linkea dinámicamente (ver `ldd usr/bin/featherai`).
+# Las alternativas `|` cubren el renombre t64 de Debian trixie / Ubuntu 24.10+.
+[bundle.deb]
+depends = [
+    "libwebkit2gtk-4.1-0",
+    "libgtk-3-0 | libgtk-3-0t64",
+    "libxdo3",
+    "libssl3 | libssl3t64",
+]

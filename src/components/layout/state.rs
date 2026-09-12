@@ -7,42 +7,16 @@
 
 use dioxus::prelude::*;
 
-/// Usuario autenticado — equivalente de `User` de la app de referencia.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct User {
-    pub username: String,
-    pub email: Option<String>,
-    pub nombre: Option<String>,
-    pub apellido: Option<String>,
-    pub avatar_url: Option<String>,
-    /// Rol (super_admin/admin/operativo).
-    #[allow(dead_code)]
-    pub role: String,
-}
-
-impl User {
-    /// `"nombre apellido"` o `username` — equivalente de `full_name` en
-    /// `AuthContext` de feathrai-frontend.
-    pub fn full_name(&self) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        if let Some(n) = self.nombre.as_deref().filter(|s| !s.is_empty()) {
-            parts.push(n);
-        }
-        if let Some(a) = self.apellido.as_deref().filter(|s| !s.is_empty()) {
-            parts.push(a);
-        }
-        if parts.is_empty() {
-            self.username.clone()
-        } else {
-            parts.join(" ")
-        }
-    }
-}
+// `User` compartido con la persistencia y la capa de servicios: vive en
+// `crate::models` (el `StoredUser` persistido en GuardianDB convierte a este
+// tipo de vista) y se re-exporta acá para no tocar a los consumidores.
+pub use crate::models::User;
 
 /// Estado de autenticación — equivalente de `AuthContextType`.
 ///
-/// La API de login (`login`/`verifyToken`) queda fuera del port; los
-/// componentes solo consumen `user`/`is_authenticated` y cierran sesión con
+/// La sesión es en memoria (no se persiste): `Login` la completa validando
+/// credenciales contra GuardianDB en nativo (o modo demo en web); los
+/// componentes consumen `user`/`is_authenticated` y cierran sesión con
 /// [`logout`].
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct AuthState {
@@ -55,13 +29,32 @@ pub fn logout(mut auth: Signal<AuthState>) {
     *auth.write() = AuthState::default();
 }
 
-/// Sale de la aplicación cerrando la ventana nativa.
+/// Sale de la aplicación terminando el proceso.
 ///
 /// Sin barra de título no hay botón de cierre nativo, así que el cierre se
-/// dispara desde la UI. Solo tiene efecto en desktop; en web/server es no-op.
+/// dispara desde la UI. Antes de salir hace el cierre ordenado de GuardianDB
+/// ([`crate::persistence::Db::close_blocking`]: flush de stores y backend
+/// Iroh, esperado desde un hilo propio porque el hilo de la UI ya corre dentro
+/// del runtime de dioxus desktop). Solo tiene efecto en desktop; en web/server
+/// es no-op.
 pub fn exit_app() {
+    #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
+    {
+        // Ocultar ya: el cierre ordenado de abajo bloquea el hilo de la UI
+        // (el shutdown de Iroh tarda ~15 s) y la ventana quedaría congelada.
+        dioxus::desktop::window().set_visible(false);
+        if let Some(db) = crate::persistence::try_db() {
+            // `close_blocking` espera desde un hilo propio: acá ya estamos
+            // dentro del runtime de dioxus desktop, donde `Handle::block_on`
+            // panickea.
+            db.close_blocking();
+        }
+    }
+    // `dioxus::desktop::window().close()` no alcanza: la ventana desaparece
+    // pero el event loop de dioxus sigue vivo sin ventanas y el proceso queda
+    // colgado. Ya con la base cerrada, se termina el proceso.
     #[cfg(feature = "desktop")]
-    dioxus::desktop::window().close();
+    std::process::exit(0);
 }
 
 /// Ícono de navegación — clase de Bootstrap Icons (mismo contrato que el
@@ -137,7 +130,9 @@ pub fn use_current_path() -> Memo<String> {
     use_memo(|| router().current::<crate::Route>().to_string())
 }
 
-/// Proveedor de autenticación — equivalente de `AuthProvider` (sesión vacía).
+/// Proveedor de autenticación — equivalente de `AuthProvider`. La sesión
+/// arranca vacía; `Login` la completa validando en nativo contra los
+/// usuarios persistidos en GuardianDB (siembra `admin`/`admin`).
 #[component]
 pub fn AuthProvider(children: Element) -> Element {
     let auth = use_signal(AuthState::default);

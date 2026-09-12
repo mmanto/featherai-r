@@ -1,228 +1,37 @@
 //! Estado de proyectos — port a Dioxus de `ProjectContext.tsx` de
-//! feathrai-frontend, con datos de demostración en memoria (este port no
-//! tiene backend).
+//! feathrai-frontend.
+//!
+//! # Modelo compartido
+//! El modelo de dominio ([`Project`], [`Task`] y los enums) vive en
+//! `crate::models` — lo comparten la UI, la persistencia y la capa de
+//! servicios — y se re-exporta acá para que las vistas sigan importando
+//! desde `state`. Este archivo conserva lo específico de la vista:
+//! [`ViewMode`], [`ProjectState`], el proveedor, las acciones y las fechas.
+//!
+//! # Persistencia (nativo) vs demo (web)
+//! En desktop, [`ProjectProvider`] arranca con el snapshot persistido que
+//! `init_backend` (main.rs) tomó de GuardianDB y lo refresca al montar. Las
+//! acciones (`add_project`, [`update_project`], …) son `async`: mutan el
+//! estado local (optimista) y persisten vía `crate::services`, que devuelve
+//! la entidad canónica (id uuid v4 asignado por el servicio, `created_at`,
+//! `position`) con la que se reconcilia el estado. Devuelven `Err(String)`
+//! cuando la escritura falla para que la vista muestre un toast.
+//!
+//! En web/wasm no hay capa de persistencia: las acciones mutan el estado en
+//! memoria con ids provisionales ([`next_id`]) y la siembra inicial es
+//! `demo::demo_projects`.
 
+pub use crate::models::{Priority, Project, ProjectStatus, Task, TaskStatus};
 use dioxus::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// Genera ids únicos — equivalente de los ids asignados por el servidor.
+/// Genera ids provisionales únicos para los modales (el modelo demo de React
+/// los asignaba en el servidor). En nativo la capa de servicios los
+/// reemplaza por uuid v4 al persistir; en web quedan como id definitivo.
 pub fn next_id(prefix: &str) -> String {
     format!("{prefix}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
-}
-
-// ── Enums compartidos ────────────────────────────────────────────────────────
-
-/// Estado de una tarea — equivalente de `TaskStatus` en `types/project.ts`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TaskStatus {
-    Todo,
-    InProgress,
-    Done,
-}
-
-impl TaskStatus {
-    pub const ALL: [TaskStatus; 3] = [Self::Todo, Self::InProgress, Self::Done];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::Done => "done",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Todo => "Por hacer",
-            Self::InProgress => "En progreso",
-            Self::Done => "Completada",
-        }
-    }
-
-    pub fn badge(self) -> &'static str {
-        match self {
-            Self::Todo => "bg-[var(--secondary-color)] text-white",
-            Self::InProgress => "bg-[var(--primary-color)] text-white",
-            Self::Done => "bg-[var(--success-color)] text-white",
-        }
-    }
-}
-
-impl From<&str> for TaskStatus {
-    fn from(s: &str) -> Self {
-        match s {
-            "in_progress" => Self::InProgress,
-            "done" => Self::Done,
-            _ => Self::Todo,
-        }
-    }
-}
-
-/// Estado de un proyecto — equivalente de `Project['status']`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ProjectStatus {
-    Planning,
-    Active,
-    Paused,
-    Completed,
-}
-
-impl ProjectStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Planning => "planning",
-            Self::Active => "active",
-            Self::Paused => "paused",
-            Self::Completed => "completed",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Planning => "Planificación",
-            Self::Active => "Activo",
-            Self::Paused => "Pausado",
-            Self::Completed => "Completado",
-        }
-    }
-
-    pub fn badge(self) -> &'static str {
-        match self {
-            Self::Planning => "bg-[var(--secondary-color)] text-white",
-            Self::Active => "bg-[var(--success-color)] text-white",
-            Self::Paused => "bg-[var(--warning-color)] text-[#212529]",
-            Self::Completed => "bg-[var(--primary-color)] text-white",
-        }
-    }
-}
-
-impl From<&str> for ProjectStatus {
-    fn from(s: &str) -> Self {
-        match s {
-            "active" => Self::Active,
-            "paused" => Self::Paused,
-            "completed" => Self::Completed,
-            _ => Self::Planning,
-        }
-    }
-}
-
-/// Prioridad — equivalente de `Project['priority']` / `Task['priority']`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Priority {
-    Low,
-    Medium,
-    High,
-}
-
-impl Priority {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Low => "Baja",
-            Self::Medium => "Media",
-            Self::High => "Alta",
-        }
-    }
-
-    pub fn badge(self) -> &'static str {
-        match self {
-            Self::Low => "bg-[var(--success-color)] text-white",
-            Self::Medium => "bg-[var(--warning-color)] text-[#212529]",
-            Self::High => "bg-[var(--danger-color)] text-white",
-        }
-    }
-
-    /// Color usado por el borde de la barra del Gantt y cards de Kanban.
-    pub fn color(self) -> &'static str {
-        match self {
-            Self::Low => "#10b981",
-            Self::Medium => "#f59e0b",
-            Self::High => "#ef4444",
-        }
-    }
-}
-
-impl From<&str> for Priority {
-    fn from(s: &str) -> Self {
-        match s {
-            "medium" => Self::Medium,
-            "high" => Self::High,
-            _ => Self::Low,
-        }
-    }
-}
-
-// ── Tipos de dominio ──────────────────────────────────────────────────────────
-
-/// Tarea — equivalente de `Task` en `types/project.ts`. Las fechas se
-/// guardan como ISO `YYYY-MM-DD` (sin dependencias de datetime).
-#[derive(Clone, PartialEq, Debug)]
-pub struct Task {
-    pub id: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub status: TaskStatus,
-    pub assignee: Option<String>,
-    pub priority: Priority,
-    pub start_date: Option<String>,
-    pub end_date: Option<String>,
-    pub estimated_hours: Option<f64>,
-    pub tags: Vec<String>,
-}
-
-impl Task {
-    pub fn estimated_hours_text(&self) -> String {
-        match self.estimated_hours {
-            Some(h) => format!("{h}h"),
-            None => "-".to_string(),
-        }
-    }
-}
-
-/// Proyecto — equivalente de `Project` en `types/project.ts`. El negocio se
-/// guarda por nombre (demo; en React era `businessId` + servicio).
-#[derive(Clone, PartialEq, Debug)]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub business: String,
-    pub start_date: Option<String>,
-    pub end_date: Option<String>,
-    pub status: ProjectStatus,
-    pub priority: Priority,
-    pub team: Vec<String>,
-    pub color: String,
-    pub tasks: Vec<Task>,
-}
-
-impl Project {
-    /// Progreso 0-100 — equivalente de `calculateProgress` de React.
-    pub fn progress(&self) -> u8 {
-        if self.tasks.is_empty() {
-            return 0;
-        }
-        let done = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Done)
-            .count();
-        ((done as f64 / self.tasks.len() as f64) * 100.0).round() as u8
-    }
-
-    pub fn task_count(&self, status: TaskStatus) -> usize {
-        self.tasks.iter().filter(|t| t.status == status).count()
-    }
 }
 
 /// Modo de vista de las tareas — equivalente de `ViewMode` de React.
@@ -242,22 +51,51 @@ pub struct ProjectState {
     pub selected_project_id: Option<String>,
 }
 
-impl ProjectState {
-    fn seed() -> Self {
-        Self {
-            projects: seed_projects(),
-            selected_project_id: None,
-        }
-    }
-}
-
 // ── Proveedor y acciones ──────────────────────────────────────────────────────
 
+/// Listado inicial de proyectos:
+/// - nativo: el snapshot persistido tomado en `init_backend` (main.rs);
+/// - web/wasm: la siembra demo en memoria.
+#[cfg(not(target_arch = "wasm32"))]
+fn initial_projects() -> Vec<Project> {
+    crate::persistence::initial_projects()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_projects() -> Vec<Project> {
+    crate::demo::demo_projects()
+}
+
 /// Proveedor del estado de proyectos — equivalente de `ProjectProvider`.
+///
+/// En nativo refresca el listado desde GuardianDB al montar (los cambios
+/// quedan persistidos aunque la vista se desmonte al navegar).
 #[component]
 pub fn ProjectProvider(children: Element) -> Element {
-    let state = use_signal(ProjectState::seed);
+    let initial = initial_projects();
+    let state = use_signal(|| ProjectState {
+        projects: initial,
+        selected_project_id: None,
+    });
     use_context_provider(|| state);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use_effect(move || {
+        let state = state.clone();
+        spawn(async move {
+            let mut state = state;
+            match crate::services::project::reload_all(crate::persistence::db()).await {
+                Ok(projects) => {
+                    let mut s = state.write();
+                    if s.projects != projects {
+                        s.projects = projects;
+                    }
+                }
+                Err(e) => eprintln!("[featherai] refrescando proyectos: {e}"),
+            }
+        });
+    });
+
     rsx! { {children} }
 }
 
@@ -275,57 +113,165 @@ pub fn select_project(mut state: Signal<ProjectState>, id: Option<String>) {
 }
 
 /// Agrega un proyecto — equivalente de `addProject`.
-pub fn add_project(mut state: Signal<ProjectState>, project: Project) {
-    state.write().projects.push(project);
+///
+/// Nativo: persiste vía `services::project::create_project` (asigna uuid v4
+/// y `created_at`) y agrega al estado el proyecto canónico devuelto. Web:
+/// lo agrega tal cual (id provisional).
+pub async fn add_project(mut state: Signal<ProjectState>, project: Project) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let created = crate::services::project::create_project(crate::persistence::db(), project)
+            .await
+            .map_err(|e| e.to_string())?;
+        state.write().projects.push(created);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        state.write().projects.push(project);
+    }
+    Ok(())
 }
 
 /// Actualiza un proyecto — equivalente de `updateProject`.
-pub fn update_project(mut state: Signal<ProjectState>, id: &str, f: impl FnOnce(&mut Project)) {
-    let mut s = state.write();
-    if let Some(p) = s.projects.iter_mut().find(|p| p.id == id) {
-        f(p);
+///
+/// Aplica `f` al proyecto en el estado (optimista) y, en nativo, persiste el
+/// resultado vía `services::project::replace_project` (conserva
+/// `created_at`). Proyecto inexistente → no-op.
+pub async fn update_project(
+    mut state: Signal<ProjectState>,
+    id: &str,
+    f: impl FnOnce(&mut Project),
+) -> Result<(), String> {
+    let mut updated = None;
+    {
+        let mut s = state.write();
+        if let Some(p) = s.projects.iter_mut().find(|p| p.id == id) {
+            f(p);
+            updated = Some(p.clone());
+        }
     }
+    let Some(project) = updated else {
+        return Ok(());
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::services::project::replace_project(crate::persistence::db(), &project)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = &project; // ya aplicado al estado en memoria
+    Ok(())
 }
 
 /// Elimina un proyecto — equivalente de `deleteProject`.
-pub fn delete_project(mut state: Signal<ProjectState>, id: &str) {
+///
+/// Nativo: borra de GuardianDB (proyecto + sus TaskDoc) y recién después lo
+/// quita del estado local. Web: solo estado local.
+pub async fn delete_project(mut state: Signal<ProjectState>, id: String) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::services::project::delete_project(crate::persistence::db(), &id)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut s = state.write();
     s.projects.retain(|p| p.id != id);
-    if s.selected_project_id.as_deref() == Some(id) {
+    if s.selected_project_id.as_deref() == Some(id.as_str()) {
         s.selected_project_id = None;
     }
+    Ok(())
 }
 
 /// Agrega una tarea a un proyecto — equivalente de `addTask`.
-pub fn add_task(mut state: Signal<ProjectState>, project_id: &str, task: Task) {
-    let mut s = state.write();
-    if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
-        p.tasks.push(task);
+///
+/// Nativo: persiste vía `services::project::add_task` (asigna uuid v4 y
+/// `position` = max+1) y agrega la tarea canónica al proyecto del estado.
+/// Proyecto inexistente → `Err` (toast en la vista).
+pub async fn add_task(
+    mut state: Signal<ProjectState>,
+    project_id: &str,
+    task: Task,
+) -> Result<(), String> {
+    let project_id = project_id.to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let created =
+            crate::services::project::add_task(crate::persistence::db(), &project_id, task)
+                .await
+                .map_err(|e| e.to_string())?;
+        let mut s = state.write();
+        if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
+            p.tasks.push(created);
+        }
     }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut s = state.write();
+        if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
+            p.tasks.push(task);
+        }
+    }
+    Ok(())
 }
 
 /// Actualiza una tarea — equivalente de `updateTask`.
+///
+/// Aplica `f` a la tarea en el estado (optimista) y, en nativo, persiste el
+/// resultado vía `services::project::replace_task` (conserva `position`).
+/// Tarea inexistente → no-op.
 #[allow(clippy::too_many_arguments)]
-pub fn update_task(
+pub async fn update_task(
     mut state: Signal<ProjectState>,
     project_id: &str,
     task_id: &str,
     f: impl FnOnce(&mut Task),
-) {
-    let mut s = state.write();
-    if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
-        if let Some(t) = p.tasks.iter_mut().find(|t| t.id == task_id) {
-            f(t);
+) -> Result<(), String> {
+    let project_id = project_id.to_string();
+    let task_id = task_id.to_string();
+    let mut updated = None;
+    {
+        let mut s = state.write();
+        if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
+            if let Some(t) = p.tasks.iter_mut().find(|t| t.id == task_id) {
+                f(t);
+                updated = Some(t.clone());
+            }
         }
     }
+    let Some(task) = updated else {
+        return Ok(());
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::services::project::replace_task(crate::persistence::db(), &project_id, &task)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = &task; // ya aplicado al estado en memoria
+    Ok(())
 }
 
 /// Elimina una tarea — equivalente de `deleteTask`.
-pub fn delete_task(mut state: Signal<ProjectState>, project_id: &str, task_id: &str) {
+///
+/// Nativo: borra de GuardianDB y recién después del estado local. Si el
+/// TaskDoc no existe o pertenece a otro proyecto → no-op (contrato
+/// idempotente del servicio).
+pub async fn delete_task(
+    mut state: Signal<ProjectState>,
+    project_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let project_id = project_id.to_string();
+    let task_id = task_id.to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::services::project::delete_task(crate::persistence::db(), &project_id, &task_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut s = state.write();
     if let Some(p) = s.projects.iter_mut().find(|p| p.id == project_id) {
         p.tasks.retain(|t| t.id != task_id);
     }
+    Ok(())
 }
 
 // ── Fechas (ISO YYYY-MM-DD) ──────────────────────────────────────────────────
@@ -367,185 +313,4 @@ pub fn fmt_date(iso: &str) -> String {
 pub fn weekday_short(iso: &str) -> &'static str {
     let day = epoch_days(iso).unwrap_or(0);
     WEEKDAYS_SHORT[(day + 4).rem_euclid(7) as usize]
-}
-
-// ── Datos de demostración ─────────────────────────────────────────────────────
-
-fn seed_projects() -> Vec<Project> {
-    let mut p1 = Project {
-        id: "p1".into(),
-        name: "Sistema de Gestión de Inventarios".into(),
-        description: Some("Plataforma web para control de stock y reposiciones.".into()),
-        business: "AgileTeam Corp".into(),
-        start_date: Some("2026-08-03".into()),
-        end_date: Some("2026-10-30".into()),
-        status: ProjectStatus::Active,
-        priority: Priority::High,
-        team: vec!["Juan Pérez".into(), "María García".into()],
-        color: "#00A3F0".into(),
-        tasks: vec![
-            Task {
-                id: "t1".into(),
-                title: "Modelo de datos de productos".into(),
-                description: Some("Entidades, relaciones y migraciones iniciales.".into()),
-                status: TaskStatus::Done,
-                assignee: Some("María García".into()),
-                priority: Priority::High,
-                start_date: Some("2026-08-03".into()),
-                end_date: Some("2026-08-14".into()),
-                estimated_hours: Some(24.0),
-                tags: vec!["backend".into(), "database".into()],
-            },
-            Task {
-                id: "t2".into(),
-                title: "API de movimientos de stock".into(),
-                description: Some("Alta, baja y ajuste de existencias.".into()),
-                status: TaskStatus::InProgress,
-                assignee: Some("Juan Pérez".into()),
-                priority: Priority::High,
-                start_date: Some("2026-08-15".into()),
-                end_date: Some("2026-09-12".into()),
-                estimated_hours: Some(40.0),
-                tags: vec!["backend".into(), "api".into()],
-            },
-            Task {
-                id: "t3".into(),
-                title: "Pantalla de inventario".into(),
-                description: Some("Tabla con filtros y exportación a CSV.".into()),
-                status: TaskStatus::InProgress,
-                assignee: None,
-                priority: Priority::Medium,
-                start_date: Some("2026-09-01".into()),
-                end_date: Some("2026-09-30".into()),
-                estimated_hours: Some(32.0),
-                tags: vec!["frontend".into(), "ui".into()],
-            },
-            Task {
-                id: "t4".into(),
-                title: "Alertas de reposición".into(),
-                description: Some("Notificaciones por email bajo umbral mínimo.".into()),
-                status: TaskStatus::Todo,
-                assignee: Some("Juan Pérez".into()),
-                priority: Priority::Low,
-                start_date: Some("2026-10-01".into()),
-                end_date: Some("2026-10-23".into()),
-                estimated_hours: Some(16.0),
-                tags: vec!["notifications".into()],
-            },
-        ],
-    };
-
-    let mut p2 = Project {
-        id: "p2".into(),
-        name: "Portal de Ventas E-commerce".into(),
-        description: Some("Catálogo, carrito y checkout para tienda online.".into()),
-        business: "NovaSoft".into(),
-        start_date: Some("2026-09-01".into()),
-        end_date: Some("2026-12-15".into()),
-        status: ProjectStatus::Planning,
-        priority: Priority::Medium,
-        team: vec!["Carlos López".into()],
-        color: "#8b5cf6".into(),
-        tasks: vec![
-            Task {
-                id: "t5".into(),
-                title: "Definición de alcance".into(),
-                description: Some("Requerimientos y mapeo de flujos de compra.".into()),
-                status: TaskStatus::InProgress,
-                assignee: Some("Carlos López".into()),
-                priority: Priority::High,
-                start_date: Some("2026-09-01".into()),
-                end_date: Some("2026-09-15".into()),
-                estimated_hours: Some(20.0),
-                tags: vec!["planning".into()],
-            },
-            Task {
-                id: "t6".into(),
-                title: "Diseño del catálogo".into(),
-                description: Some("Wireframes de listado y detalle de producto.".into()),
-                status: TaskStatus::Todo,
-                assignee: None,
-                priority: Priority::Medium,
-                start_date: Some("2026-09-16".into()),
-                end_date: Some("2026-10-05".into()),
-                estimated_hours: Some(30.0),
-                tags: vec!["design".into(), "ux".into()],
-            },
-            Task {
-                id: "t7".into(),
-                title: "Integración de pagos".into(),
-                description: Some("Evaluación de proveedores y sandbox.".into()),
-                status: TaskStatus::Todo,
-                assignee: None,
-                priority: Priority::Medium,
-                start_date: Some("2026-10-06".into()),
-                end_date: Some("2026-11-20".into()),
-                estimated_hours: Some(48.0),
-                tags: vec!["payments".into(), "integration".into()],
-            },
-        ],
-    };
-
-    let mut p3 = Project {
-        id: "p3".into(),
-        name: "App Móvil de Fidelización".into(),
-        description: Some("Programa de puntos y beneficios para clientes.".into()),
-        business: "TechCorp".into(),
-        start_date: Some("2026-03-10".into()),
-        end_date: Some("2026-07-20".into()),
-        status: ProjectStatus::Completed,
-        priority: Priority::Low,
-        team: vec!["Ana Ruiz".into(), "Pedro Díaz".into()],
-        color: "#10b981".into(),
-        tasks: vec![
-            Task {
-                id: "t8".into(),
-                title: "Módulo de puntos".into(),
-                description: Some("Acumulación y canje de puntos por compras.".into()),
-                status: TaskStatus::Done,
-                assignee: Some("Ana Ruiz".into()),
-                priority: Priority::High,
-                start_date: Some("2026-03-10".into()),
-                end_date: Some("2026-04-30".into()),
-                estimated_hours: Some(50.0),
-                tags: vec!["backend".into()],
-            },
-            Task {
-                id: "t9".into(),
-                title: "App nativa iOS/Android".into(),
-                description: Some("Cliente móvil con wallet de beneficios.".into()),
-                status: TaskStatus::Done,
-                assignee: Some("Pedro Díaz".into()),
-                priority: Priority::Medium,
-                start_date: Some("2026-04-01".into()),
-                end_date: Some("2026-06-15".into()),
-                estimated_hours: Some(80.0),
-                tags: vec!["mobile".into(), "ui".into()],
-            },
-            Task {
-                id: "t10".into(),
-                title: "Lanzamiento en tiendas".into(),
-                description: Some("Publicación y revisión de releases.".into()),
-                status: TaskStatus::Done,
-                assignee: Some("Ana Ruiz".into()),
-                priority: Priority::Low,
-                start_date: Some("2026-06-20".into()),
-                end_date: Some("2026-07-20".into()),
-                estimated_hours: Some(12.0),
-                tags: vec!["release".into()],
-            },
-        ],
-    };
-
-    p1.tasks[1].id = "t2".into();
-    p1.tasks[2].id = "t3".into();
-    p1.tasks[3].id = "t4".into();
-    p2.tasks[0].id = "t5".into();
-    p2.tasks[1].id = "t6".into();
-    p2.tasks[2].id = "t7".into();
-    p3.tasks[0].id = "t8".into();
-    p3.tasks[1].id = "t9".into();
-    p3.tasks[2].id = "t10".into();
-
-    vec![p1, p2, p3]
 }

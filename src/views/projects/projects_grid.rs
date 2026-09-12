@@ -1,5 +1,8 @@
+use crate::components::toast::{show_toast, use_toast, ToastVariant};
+use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{
-    fmt_date, use_projects, Priority, Project, ProjectState, ProjectStatus,
+    delete_project, fmt_date, update_project, use_projects, Priority, Project, ProjectState,
+    ProjectStatus,
 };
 use dioxus::prelude::*;
 use std::rc::Rc;
@@ -52,11 +55,15 @@ fn ProjectRow(
     state: Signal<ProjectState>,
     on_select: EventHandler<String>,
     on_new_project: EventHandler<()>,
+    /// Pide confirmar el borrado (el modal vive en ProjectsGrid).
+    on_delete_request: EventHandler<String>,
 ) -> Element {
     let mut hovered = use_signal(|| false);
     let mut editing = use_signal(|| false);
     let mut editing_value = use_signal(|| project.name.clone());
     let mut open_menu = use_signal(|| false);
+    // Toasts para errores de persistencia (acciones async).
+    let toasts = use_toast();
 
     // Rc para que cada handler capture clones baratos (closures move 'static).
     let project = Rc::new(project);
@@ -97,30 +104,52 @@ fn ProjectRow(
                                 value: editing_value(),
                                 oninput: move |e| editing_value.set(e.value()),
                                 onblur: {
-                                let mut state = state.clone();
-                                let pid = pid.clone();
-                                move |_| {
-                                    let value = editing_value().trim().to_string();
-                                    if !value.is_empty() {
-                                        let mut s = state.write();
-                                        if let Some(p) = s.projects.iter_mut().find(|p| p.id == *pid) {
-                                            p.name = value;
+                                    let state = state.clone();
+                                    let pid = pid.clone();
+                                    move |_| {
+                                        let value = editing_value().trim().to_string();
+                                        if !value.is_empty() {
+                                            let pid = pid.clone();
+                                            let toasts = toasts;
+                                            spawn(async move {
+                                                if let Err(err) = update_project(state, &pid, |p| {
+                                                    p.name = value.clone();
+                                                })
+                                                .await
+                                                {
+                                                    show_toast(
+                                                        toasts,
+                                                        format!("No se pudo renombrar el proyecto: {err}"),
+                                                        ToastVariant::Error,
+                                                    );
+                                                }
+                                            });
                                         }
+                                        editing.set(false);
                                     }
-                                    editing.set(false);
-                                }
-                            },
+                                },
                                 onkeydown: {
-                                    let mut state = state.clone();
+                                    let state = state.clone();
                                     let pid = pid.clone();
                                     move |e| {
                                         if e.key() == Key::Enter {
                                             let value = editing_value().trim().to_string();
                                             if !value.is_empty() {
-                                                let mut s = state.write();
-                                                if let Some(p) = s.projects.iter_mut().find(|p| p.id == *pid) {
-                                                    p.name = value;
-                                                }
+                                                let pid = pid.clone();
+                                                let toasts = toasts;
+                                                spawn(async move {
+                                                    if let Err(err) = update_project(state, &pid, |p| {
+                                                        p.name = value.clone();
+                                                    })
+                                                    .await
+                                                    {
+                                                        show_toast(
+                                                            toasts,
+                                                            format!("No se pudo renombrar el proyecto: {err}"),
+                                                            ToastVariant::Error,
+                                                        );
+                                                    }
+                                                });
                                             }
                                             editing.set(false);
                                         } else if e.key() == Key::Escape {
@@ -225,19 +254,13 @@ fn ProjectRow(
                         li {
                             button {
                                 class: "flex w-full items-center gap-2 px-3 py-1.5 text-sm text-[var(--danger-color)] hover:bg-[var(--bg-secondary)]",
-                                onclick: move |e| {
-                                    e.stop_propagation();
-                                    open_menu.set(false);
-                                    {
-                                        let state = state.clone();
-                                        let pid = pid.clone();
-                                        let eval = document::eval("confirm('¿Eliminar este proyecto?');");
-                                        spawn(async move {
-                                            let mut eval = eval;
-                                            if eval.recv::<bool>().await.unwrap_or(false) {
-                                                crate::views::projects::state::delete_project(state, &pid);
-                                            }
-                                        });
+                                onclick: {
+                                    let pid = pid.clone();
+                                    let on_delete_request = on_delete_request.clone();
+                                    move |e| {
+                                        e.stop_propagation();
+                                        open_menu.set(false);
+                                        on_delete_request.call(pid.as_str().to_string());
                                     }
                                 },
                                 i { class: "bi bi-trash me-2" }
@@ -265,6 +288,11 @@ pub fn ProjectsGrid(
     let mut search = use_signal(String::new);
     let sort_field = use_signal(|| SortField::Name);
     let asc = use_signal(|| true);
+    // Proyecto pendiente de confirmar borrado (id) — el modal vive acá
+    // porque las filas son <tr> y un overlay fijo no debe anidarse en una
+    // tabla. El `confirm()` de JS no muestra diálogo en desktop.
+    let mut confirm_delete = use_signal(|| Option::<String>::None);
+    let toasts = use_toast();
 
     let total = projects.len();
     let active = projects
@@ -459,11 +487,46 @@ pub fn ProjectsGrid(
                                             state: state.clone(),
                                             on_select: on_project_select.clone(),
                                             on_new_project: on_new_project.clone(),
+                                            on_delete_request: move |id| confirm_delete.set(Some(id)),
                                         }
                                     }
                                 }) }
                             }
                         }
+                    }
+                }
+            }
+
+            // ── Confirmación de borrado ──
+            if let Some(id) = confirm_delete() {
+                if let Some(project) = projects.iter().find(|p| p.id == id) {
+                    ConfirmDialog {
+                        title: "Eliminar proyecto".to_string(),
+                        message: format!(
+                            "¿Eliminar el proyecto \"{}\"? Se eliminarán todas sus tareas. Esta acción no se puede deshacer.",
+                            project.name
+                        ),
+                        confirm_label: "Eliminar".to_string(),
+                        on_cancel: move |_| confirm_delete.set(None),
+                        on_confirm: {
+                            let state = state.clone();
+                            let toasts = toasts;
+                            move |_| {
+                                confirm_delete.set(None);
+                                let id = id.clone();
+                                let state = state.clone();
+                                let toasts = toasts;
+                                spawn(async move {
+                                    if let Err(err) = delete_project(state, id.clone()).await {
+                                        show_toast(
+                                            toasts,
+                                            format!("No se pudo eliminar el proyecto: {err}"),
+                                            ToastVariant::Error,
+                                        );
+                                    }
+                                });
+                            }
+                        },
                     }
                 }
             }

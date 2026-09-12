@@ -1,5 +1,6 @@
 use crate::components::layout::AppLayout;
 use crate::components::protected_route::{ProtectedRoute, SUPER_ADMIN_ROLES};
+use crate::components::toast::{show_toast, use_toast, ToastVariant};
 use crate::views::projects::project_detail::ProjectDetail;
 use crate::views::projects::projects_grid::ProjectsGrid;
 use crate::views::projects::state::{
@@ -8,9 +9,30 @@ use crate::views::projects::state::{
 };
 use dioxus::prelude::*;
 
-/// Negocios de demostración para el selector del modal (en React venían de
-/// `businessService.getAll()`).
+/// Negocios demo que se ofrecen al crear un proyecto (en React venían de
+/// `businessService.getAll()`). La lista se completa con los negocios que ya
+/// usan los proyectos existentes: un negocio se crea eligiendo *Nuevo
+/// negocio…* en el formulario y guardando el primer proyecto que lo usa.
 const BUSINESSES: [&str; 3] = ["AgileTeam Corp", "NovaSoft", "TechCorp"];
+
+/// Valor centinela del selector de negocio: muestra el campo para escribir
+/// un negocio nuevo. No puede chocar con un nombre real (`business_options`
+/// lo filtra y la creación lo rechaza).
+const NEW_BUSINESS: &str = "__new__";
+
+/// Opciones del selector: los demo + los negocios de los proyectos existentes
+/// (deduplicados). Un proyecto sin negocio no contribuye nombres.
+fn business_options(projects: &[Project]) -> Vec<String> {
+    let mut options: Vec<String> = BUSINESSES.iter().map(|b| (*b).to_string()).collect();
+    for project in projects {
+        if let Some(b) = &project.business {
+            if !b.is_empty() && b != NEW_BUSINESS && !options.contains(b) {
+                options.push(b.clone());
+            }
+        }
+    }
+    options
+}
 
 /// Página `/admin/projects` — port de `ProjectManagement.tsx`.
 ///
@@ -33,6 +55,7 @@ pub fn Projects() -> Element {
 #[component]
 fn ProjectManagement() -> Element {
     let state = use_projects();
+    let toasts = use_toast();
     let mut show_new_project = use_signal(|| false);
     let mut show_new_task = use_signal(|| false);
 
@@ -46,14 +69,25 @@ fn ProjectManagement() -> Element {
 
     // El id del proyecto seleccionado para los handlers del detalle (el
     // componente cierra sobre `state` y relee el id actual al disparar).
+    // Las acciones son async y persisten en GuardianDB (nativo): cada
+    // handler lanza un `spawn`; el estado local ya se actualiza solo, los
+    // `Err` se reportan con un toast.
 
     // ── Handlers del detalle — releen el id desde el estado ──
     let detail_on_update_task = {
         let state = state.clone();
         move |t: Task| {
             if let Some(pid) = state.read().selected_project_id.clone() {
-                let t2 = t.clone();
-                update_task(state.clone(), &pid, &t2.id, |x| *x = t);
+                let state = state.clone();
+                spawn(async move {
+                    if let Err(e) = update_task(state, &pid, &t.id, |x| *x = t.clone()).await {
+                        show_toast(
+                            toasts,
+                            format!("No se pudo guardar la tarea: {e}"),
+                            ToastVariant::Error,
+                        );
+                    }
+                });
             }
         }
     };
@@ -61,7 +95,20 @@ fn ProjectManagement() -> Element {
         let state = state.clone();
         move |id: String| {
             if let Some(pid) = state.read().selected_project_id.clone() {
-                delete_task(state.clone(), &pid, &id);
+                let state = state.clone();
+                spawn(async move {
+                    match delete_task(state, &pid, &id).await {
+                        Ok(()) => eprintln!("[featherai] tarea {id} eliminada (proyecto {pid})"),
+                        Err(e) => {
+                            eprintln!("[featherai] no se pudo eliminar la tarea {id}: {e}");
+                            show_toast(
+                                toasts,
+                                format!("No se pudo eliminar la tarea: {e}"),
+                                ToastVariant::Error,
+                            );
+                        }
+                    }
+                });
             }
         }
     };
@@ -69,8 +116,16 @@ fn ProjectManagement() -> Element {
         let state = state.clone();
         move |p: Project| {
             if let Some(pid) = state.read().selected_project_id.clone() {
-                let p = p.clone();
-                update_project(state.clone(), &pid, |x| *x = p);
+                let state = state.clone();
+                spawn(async move {
+                    if let Err(e) = update_project(state, &pid, |x| *x = p.clone()).await {
+                        show_toast(
+                            toasts,
+                            format!("No se pudo guardar el proyecto: {e}"),
+                            ToastVariant::Error,
+                        );
+                    }
+                });
             }
         }
     };
@@ -100,7 +155,16 @@ fn ProjectManagement() -> Element {
             NewProjectModal {
                 on_close: move |_| *show_new_project.write() = false,
                 on_submit: move |p| {
-                    add_project(state, p);
+                    let state = state.clone();
+                    spawn(async move {
+                        if let Err(e) = add_project(state, p).await {
+                            show_toast(
+                                toasts,
+                                format!("No se pudo crear el proyecto: {e}"),
+                                ToastVariant::Error,
+                            );
+                        }
+                    });
                     *show_new_project.write() = false;
                 },
             }
@@ -111,7 +175,16 @@ fn ProjectManagement() -> Element {
                 on_close: move |_| *show_new_task.write() = false,
                 on_submit: move |t| {
                     if let Some(pid) = state.read().selected_project_id.clone() {
-                        add_task(state, &pid, t);
+                        let state = state.clone();
+                        spawn(async move {
+                            if let Err(e) = add_task(state, &pid, t).await {
+                                show_toast(
+                                    toasts,
+                                    format!("No se pudo agregar la tarea: {e}"),
+                                    ToastVariant::Error,
+                                );
+                            }
+                        });
                     }
                     *show_new_task.write() = false;
                 },
@@ -123,9 +196,13 @@ fn ProjectManagement() -> Element {
 /// Modal de nuevo proyecto — port de `NewProjectModal` de `ProjectManagement.tsx`.
 #[component]
 fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>) -> Element {
+    let state = use_projects();
+    let options = business_options(&state.read().projects);
     let mut name = use_signal(String::new);
     let mut description = use_signal(String::new);
-    let mut business = use_signal(|| BUSINESSES[0].to_string());
+    // "" = sin negocio; NEW_BUSINESS = el usuario está escribiendo uno nuevo.
+    let mut business = use_signal(String::new);
+    let mut new_business = use_signal(String::new);
     let mut start_date = use_signal(String::new);
     let mut end_date = use_signal(String::new);
     let mut status = use_signal(|| ProjectStatus::Planning);
@@ -138,6 +215,21 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
         if name.is_empty() {
             return;
         }
+        // Negocio elegido: ninguno, uno existente o uno recién escrito.
+        let business_name = {
+            let selection = business();
+            if selection == NEW_BUSINESS {
+                let created = new_business().trim().to_string();
+                if created.is_empty() || created == NEW_BUSINESS {
+                    return; // pidió crear un negocio pero no escribió el nombre
+                }
+                Some(created)
+            } else if selection.is_empty() {
+                None
+            } else {
+                Some(selection)
+            }
+        };
         on_submit.call(Project {
             id: next_id("p"),
             name,
@@ -149,7 +241,7 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                     Some(d)
                 }
             },
-            business: business(),
+            business: business_name,
             start_date: {
                 let d = start_date().trim().to_string();
                 if d.is_empty() {
@@ -174,6 +266,7 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                 .filter(|s| !s.is_empty())
                 .collect(),
             color: color(),
+            created_at: None, // lo asigna la capa de servicios al persistir
             tasks: Vec::new(),
         });
     };
@@ -188,14 +281,24 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                     }
                     div { class: "p-4",
                         div { class: "mb-3",
-                            label { class: "mb-1 block text-xs font-medium tracking-wide text-[var(--text-secondary)]", "Empresa / Negocio *" }
+                            label { class: "mb-1 block text-xs font-medium tracking-wide text-[var(--text-secondary)]", "Empresa / Negocio" }
                             select {
                                 class: "block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:outline-none",
                                 value: business(),
                                 onchange: move |e| business.set(e.value()),
-                                option { value: "AgileTeam Corp", "AgileTeam Corp" }
-                                option { value: "NovaSoft", "NovaSoft" }
-                                option { value: "TechCorp", "TechCorp" }
+                                option { value: "", "— Sin negocio —" }
+                                for option in &options {
+                                    option { key: "{option}", value: "{option}", "{option}" }
+                                }
+                                option { value: NEW_BUSINESS, "Nuevo negocio…" }
+                            }
+                            if business() == NEW_BUSINESS {
+                                input {
+                                    class: "mt-2 block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:shadow-[0_0_0_3px_rgba(0,163,240,0.12)] focus:outline-none",
+                                    value: new_business(),
+                                    oninput: move |e| new_business.set(e.value()),
+                                    placeholder: "Nombre del nuevo negocio",
+                                }
                             }
                         }
                         div { class: "mb-3",

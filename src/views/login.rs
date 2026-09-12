@@ -4,8 +4,12 @@ use dioxus::prelude::*;
 /// Página de login — port de `LoginForm.tsx` de feathrai-frontend.
 ///
 /// Tarjeta centrada con estilo inline idéntico al de React (`BRAND_COLOR`,
-/// campos con foco azul vía `.feather-input:focus`, botón "INICIAR SESIÓN"),
-/// sin autenticación real: el botón simula iniciar sesión como super_admin.
+/// campos con foco azul vía `.feather-input:focus`, botón "INICIAR SESIÓN").
+///
+/// Nativo: valida credenciales contra los usuarios persistidos en
+/// GuardianDB (`services::auth::login`; la siembra crea `admin`/`admin`).
+/// Web/wasm: demo sin backend — cualquier credencial no vacía entra como
+/// `super_admin`.
 #[component]
 pub fn Login() -> Element {
     let mut auth = use_auth();
@@ -44,14 +48,47 @@ pub fn Login() -> Element {
                             return;
                         }
                         *form_error.write() = None;
-                        auth.write().is_authenticated = true;
-                        auth.write().user = Some(crate::components::layout::User {
-                            username: username().trim().to_string(),
-                            nombre: Some("Admin".to_string()),
-                            role: "super_admin".to_string(),
-                            ..Default::default()
+                        let user_input = username().trim().to_string();
+                        let pass = password().to_string();
+                        spawn(async move {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                match crate::services::auth::login(
+                                    crate::persistence::db(),
+                                    &user_input,
+                                    &pass,
+                                )
+                                .await
+                                {
+                                    Ok(Some(user)) => {
+                                        auth.write().is_authenticated = true;
+                                        auth.write().user = Some(user);
+                                        navigator.push("/admin/projects");
+                                    }
+                                    Ok(None) => {
+                                        *form_error.write() =
+                                            Some("Usuario o contraseña inválidos".to_string());
+                                    }
+                                    Err(e) => {
+                                        *form_error.write() =
+                                            Some(format!("Error de almacenamiento: {e}"));
+                                    }
+                                }
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                // Demo web: cualquier credencial entra como super_admin.
+                                let _ = &pass;
+                                auth.write().is_authenticated = true;
+                                auth.write().user = Some(crate::models::User {
+                                    username: user_input,
+                                    nombre: Some("Admin".to_string()),
+                                    role: "super_admin".to_string(),
+                                    ..Default::default()
+                                });
+                                navigator.push("/admin/projects");
+                            }
                         });
-                        navigator.push("/admin/projects");
                     },
                     style: "display:flex;flex-direction:column;gap:20px;",
 

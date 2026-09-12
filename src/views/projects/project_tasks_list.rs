@@ -1,4 +1,5 @@
 use crate::components::layout::use_auth;
+use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{fmt_date, Task, TaskStatus, ViewMode};
 use dioxus::prelude::*;
 use std::rc::Rc;
@@ -50,6 +51,8 @@ fn TaskRow(
     user_name: String,
     on_select: EventHandler<String>,
     on_update: EventHandler<Task>,
+    /// Pide confirmar el borrado (el modal vive en ProjectTasksList).
+    on_delete_request: EventHandler<String>,
 ) -> Element {
     let mut hovered = use_signal(|| false);
     let mut editing = use_signal(|| false);
@@ -157,6 +160,19 @@ fn TaskRow(
                                 },
                                 i { class: "bi bi-pencil" }
                             }
+                            button {
+                                class: "inline-flex items-center justify-center p-1.5 rounded text-[var(--text-secondary)] hover:bg-[var(--table-hover)] hover:text-[var(--danger-color)]",
+                                title: "Eliminar",
+                                onclick: {
+                                    let tid = tid.clone();
+                                    let on_delete_request = on_delete_request.clone();
+                                    move |e| {
+                                        e.stop_propagation();
+                                        on_delete_request.call(tid.clone());
+                                    }
+                                },
+                                i { class: "bi bi-trash" }
+                            }
                         }
                     }
                 }
@@ -230,6 +246,7 @@ fn TaskRow(
 pub fn ProjectTasksList(
     project: crate::views::projects::state::Project,
     on_update_task: EventHandler<Task>,
+    on_delete_task: EventHandler<String>,
     on_task_select: EventHandler<String>,
     view_mode: ViewMode,
     on_view_mode_change: EventHandler<ViewMode>,
@@ -238,6 +255,9 @@ pub fn ProjectTasksList(
     let mut filter = use_signal(|| Option::<TaskStatus>::None);
     let sort_field = use_signal(|| TaskSort::Title);
     let asc = use_signal(|| true);
+    // Tarea pendiente de confirmar borrado (id) — el modal vive acá porque
+    // las filas son <tr> y un overlay fijo no debe anidarse en una tabla.
+    let mut confirm_delete = use_signal(|| Option::<String>::None);
 
     let auth = use_auth();
     let user_name = auth
@@ -352,6 +372,25 @@ pub fn ProjectTasksList(
                 }
             }
 
+            // ── Confirmación de borrado ──
+            if let Some(id) = confirm_delete() {
+                if let Some(task) = project.tasks.iter().find(|t| t.id == id) {
+                    ConfirmDialog {
+                        title: "Eliminar tarea".to_string(),
+                        message: format!(
+                            "¿Eliminar la tarea \"{}\"? Esta acción no se puede deshacer.",
+                            task.title
+                        ),
+                        confirm_label: "Eliminar".to_string(),
+                        on_cancel: move |_| confirm_delete.set(None),
+                        on_confirm: move |_| {
+                            confirm_delete.set(None);
+                            on_delete_task.call(id.clone());
+                        },
+                    }
+                }
+            }
+
             // ── Tabla ──
             div { class: "tasks-grid-table rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] shadow-[var(--shadow-sm)]",
                 div { class: "overflow-x-auto",
@@ -414,6 +453,7 @@ pub fn ProjectTasksList(
                                             user_name: user_name.clone(),
                                             on_select: on_task_select.clone(),
                                             on_update: on_update_task.clone(),
+                                            on_delete_request: move |id| confirm_delete.set(Some(id)),
                                         }
                                     }
                                 }) }

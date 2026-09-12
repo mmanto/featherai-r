@@ -124,7 +124,8 @@ h6 {
   transition: margin-left 0.2s ease-in-out;
   overflow: hidden;
   position: relative;
-  z-index: 1;
+  /* Sin z-index: un contexto de apilamiento aquí atraparía los modales
+     (position:fixed, z-index:1050) por debajo del sidebar (z-index:1000). */
 }
 
 /* Ajuste cuando el sidebar está colapsado */
@@ -138,7 +139,7 @@ h6 {
   overflow-x: hidden;
   background-color: var(--bg-primary);
   position: relative;
-  z-index: 1;
+  /* Sin z-index: ver comentario en .layout-main-wrapper. */
 }
 
 /* ── Sidebar (Sidebar.css de feathrai-frontend) ── */

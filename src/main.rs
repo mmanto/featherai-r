@@ -1,3 +1,11 @@
+// En Windows, el ejecutable empaquetado es una app GUI: sin esto se abre una
+// consola negra detrás de la ventana. Solo en release para conservar los logs
+// de `dx serve`/`cargo run` durante el desarrollo.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 // The dioxus prelude contains a ton of common items used in dioxus apps. It's a good idea to import wherever you
 // need dioxus
 use dioxus::prelude::*;
@@ -11,6 +19,50 @@ use views::{AdminPanel, Login, Projects, Settings};
 mod components;
 /// Define a views module that contains the UI for all Layouts and Routes for our app.
 mod views;
+/// Modelo de dominio compartido (serializable; docs de GuardianDB).
+mod models;
+/// Datos de demostración (target-neutral: siembra nativa + demo web).
+mod demo;
+/// Persistencia GuardianDB embebida + capa de servicios — solo nativo.
+/// En web/wasm la UI conserva el comportamiento demo en memoria.
+#[cfg(not(target_arch = "wasm32"))]
+mod persistence;
+#[cfg(not(target_arch = "wasm32"))]
+mod services;
+
+/// Abre GuardianDB (data dir por defecto o `FEATHRAI_DATA_DIR`), siembra
+/// demo/admin si el store está vacío y registra la base + el listado
+/// inicial en los globals de `crate::persistence`.
+///
+/// Un runtime tokio propio (estático) para no depender del runtime de
+/// dioxus: GuardianDB necesita su propio loop de I/O.
+#[cfg(not(target_arch = "wasm32"))]
+fn init_backend() {
+    use std::sync::OnceLock;
+
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    let rt = RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime tokio de featherai")
+    });
+    let dir = persistence::default_data_dir();
+    let db = rt
+        .block_on(persistence::open(dir))
+        .unwrap_or_else(|e| {
+            eprintln!("[featherai] error abriendo GuardianDB: {e}");
+            std::process::exit(1);
+        });
+    let initial = rt
+        .block_on(services::project::list_projects(&db))
+        .expect("listado inicial de proyectos");
+    persistence::set_global(db, initial);
+    // Opt-in: `FEATHRAI_SENTINEL_PORT=15433` expone el Admin RPC de sentinel
+    // para `guardian-sentinel --connect` (inspección en vivo, sin tocar el
+    // lock redb).
+    persistence::maybe_spawn_admin_rpc();
+}
 
 /// The Route enum is used to define the structure of internal routes in our app. All route enums need to derive
 /// the [`Routable`] trait, which provides the necessary methods for the router to work.
@@ -20,10 +72,14 @@ mod views;
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 enum Route {
-    // La primera pantalla es el login: "/" y "/login" renderizan la misma vista.
-    #[route("/")]
+    // La primera pantalla es el login: "/" y "/login" renderizan la misma
+    // vista. Atención: dioxus-router 0.7 solo registra el PRIMER `#[route]`
+    // de cada variante (los demás se ignoran en silencio), así que cada ruta
+    // es una variante; "/" usa `comp_name` para apuntar a `Login`.
     #[route("/login")]
     Login {},
+    #[route("/", Login)]
+    LoginIndex {},
     #[route("/settings")]
     Settings {},
 
@@ -47,7 +103,62 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 const ICONS_WOFF2: Asset = asset!("/assets/styling/fonts/bootstrap-icons.woff2");
 const ICONS_WOFF: Asset = asset!("/assets/styling/fonts/bootstrap-icons.woff");
 
+/// Agrega una línea a `<data dir>/featherai.log`.
+///
+/// Un lanzamiento desde el gestor de archivos (doble click) no tiene terminal:
+/// stdout/stderr van a un socket que nadie lee, así que un fallo ahí no deja
+/// rastro visible. Este archivo (más el hook de panic de
+/// [`install_diagnostics`]) es lo que permite diagnosticarlo.
+#[cfg(not(target_arch = "wasm32"))]
+fn log_to_file(msg: &str) {
+    use std::io::Write;
+
+    let path = crate::persistence::default_data_dir().join("featherai.log");
+    if let Some(parent) = path.parent() {
+        // En el primer arranque el data dir todavía no existe (lo crea
+        // GuardianDB), y sin él `open` falla y se perdería la línea.
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(file, "[{secs}] {msg}");
+}
+
+/// Duplica los panics en `<data dir>/featherai.log` (stderr puede irse a un
+/// socket que nadie lee, como en el doble click de un `.AppImage`).
+#[cfg(not(target_arch = "wasm32"))]
+fn install_diagnostics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        log_to_file(&format!("PANIC: {info}"));
+    }));
+}
+
 fn main() {
+    // Backend nativo (GuardianDB embebida). En web/wasm no existe y la UI
+    // corre con el estado demo en memoria.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        install_diagnostics();
+        log_to_file(&format!(
+            "main: inicio (cwd={:?}, exe={:?})",
+            std::env::current_dir(),
+            std::env::current_exe()
+        ));
+        init_backend();
+        log_to_file("main: backend GuardianDB listo; lanzando la ventana");
+    }
+
     // Ventana maximizada y sin barra de título/menú. Al no haber botón de
     // cierre nativo, el cierre se dispara desde la UI (menú de usuario y
     // botón flotante).

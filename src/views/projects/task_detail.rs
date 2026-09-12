@@ -1,4 +1,5 @@
 use crate::components::layout::use_auth;
+use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{fmt_date, Task};
 use dioxus::prelude::*;
 use std::rc::Rc;
@@ -7,7 +8,9 @@ use std::rc::Rc;
 ///
 /// Breadcrumb (Proyectos → proyecto → tarea), tarjeta con edición inline
 /// (título, descripción, estado, prioridad, asignado, horas, fechas y
-/// etiquetas) y accesos rápidos "Asignarme"/"Desasignarme".
+/// etiquetas), accesos rápidos "Asignarme"/"Desasignarme" y borrado de la
+/// tarea (confirmado). Al borrar, el estado quita la tarea del proyecto y la
+/// vista vuelve sola al detalle del proyecto (el padre ya no la encuentra).
 #[component]
 pub fn TaskDetail(
     task: Task,
@@ -15,6 +18,7 @@ pub fn TaskDetail(
     on_back: EventHandler<()>,
     on_back_to_projects: EventHandler<()>,
     on_update_task: EventHandler<Task>,
+    on_delete_task: EventHandler<String>,
 ) -> Element {
     let mut editing = use_signal(|| false);
     let mut title = use_signal(|| task.title.clone());
@@ -130,6 +134,12 @@ pub fn TaskDetail(
             editing.set(true);
         }
     };
+
+    // Borrado con confirmación in-app: el `confirm()` nativo de JS no
+    // muestra diálogo en el webview de desktop. Quien borra es el padre vía
+    // `on_delete_task`: el estado quita la tarea y este detalle se desmonta
+    // solo.
+    let mut confirm_delete = use_signal(|| false);
     rsx! {
         div {
             // ── Breadcrumb ──
@@ -155,6 +165,25 @@ pub fn TaskDetail(
                         span { class: "text-[var(--text-muted)]", "/" }
                         li { class: "text-[var(--text-secondary)]", aria_current: "page", "{task.title}" }
                     }
+                }
+            }
+
+            if confirm_delete() {
+                ConfirmDialog {
+                    title: "Eliminar tarea".to_string(),
+                    message: format!(
+                        "¿Eliminar la tarea \"{}\"? Esta acción no se puede deshacer.",
+                        task.title
+                    ),
+                    confirm_label: "Eliminar".to_string(),
+                    on_cancel: move |_| confirm_delete.set(false),
+                    on_confirm: {
+                        let task_id = task.id.clone();
+                        move |_| {
+                            confirm_delete.set(false);
+                            on_delete_task.call(task_id.clone());
+                        }
+                    },
                 }
             }
 
@@ -206,6 +235,13 @@ pub fn TaskDetail(
                                     onclick: start_edit,
                                     i { class: "bi bi-pencil me-1" }
                                     "Editar"
+                                }
+                                button {
+                                    class: "inline-flex items-center justify-center rounded border border-[var(--danger-color)] text-[var(--danger-color)] hover:bg-[var(--danger-color)] hover:text-white px-2.5 py-1 text-sm",
+                                    title: "Eliminar tarea",
+                                    onclick: move |_| confirm_delete.set(true),
+                                    i { class: "bi bi-trash me-1" }
+                                    "Eliminar"
                                 }
                             }
                         }

@@ -1,3 +1,4 @@
+use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{Task, TaskStatus, ViewMode};
 use dioxus::prelude::*;
 
@@ -19,6 +20,9 @@ pub fn KanbanBoard(
     let drag_over = use_signal(|| Option::<TaskStatus>::None);
     let mut editing_task = use_signal(|| Option::<Task>::None);
     let open_menu = use_signal(|| Option::<String>::None);
+    // Tarea pendiente de confirmar borrado (id) — el `confirm()` de JS no
+    // muestra diálogo en el webview de desktop.
+    let mut confirm_delete = use_signal(|| Option::<String>::None);
 
     let tasks = project.tasks.clone();
 
@@ -30,17 +34,6 @@ pub fn KanbanBoard(
             (*s, s.label(), col.len(), col)
         })
         .collect();
-
-    let delete_with_confirm = move |id: String| {
-        let eval = document::eval("confirm('¿Estás seguro de que quieres eliminar esta tarea?');");
-        let on_delete_task = on_delete_task.clone();
-        spawn(async move {
-            let mut eval = eval;
-            if eval.recv::<bool>().await.unwrap_or(false) {
-                on_delete_task.call(id.clone());
-            }
-        });
-    };
 
     rsx! {
         div {
@@ -89,7 +82,7 @@ pub fn KanbanBoard(
                     let tasks = tasks.clone();
                     let on_move = on_move_task.clone();
                     let on_update = on_update_task.clone();
-                    let on_delete = delete_with_confirm.clone();
+                    let confirm_delete = confirm_delete.clone();
                     rsx! {
                         div { class: "col-span-12 md:col-span-4 mb-4",
                             div { class: "flex h-full flex-col rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] shadow-[var(--shadow-sm)]", style: "background-color:#f8f9fa;border:1px solid #dee2e6",
@@ -138,7 +131,7 @@ pub fn KanbanBoard(
                                             let mut dragged_card = dragged.clone();
                                             let tasks = tasks.clone();
                                             let on_update = on_update.clone();
-                                            let on_delete = on_delete.clone();
+                                            let mut confirm_delete = confirm_delete.clone();
                                             rsx! {
                                                 div {
                                                     key: "{tid}",
@@ -180,7 +173,7 @@ pub fn KanbanBoard(
                                                                                 class: "flex w-full items-center gap-2 px-3 py-1.5 text-sm text-[var(--danger-color)] hover:bg-[var(--bg-secondary)]",
                                                                                 onclick: move |_| {
                                                                                     open_menu.set(None);
-                                                                                    on_delete(tid_delete.clone());
+                                                                                    confirm_delete.set(Some(tid_delete.clone()));
                                                                                 },
                                                                                 "Eliminar"
                                                                             }
@@ -231,6 +224,25 @@ pub fn KanbanBoard(
                         on_update_task.call(updated);
                         editing_task.set(None);
                     },
+                }
+            }
+
+            // ── Confirmación de borrado ──
+            if let Some(id) = confirm_delete() {
+                if let Some(task) = project.tasks.iter().find(|t| t.id == id) {
+                    ConfirmDialog {
+                        title: "Eliminar tarea".to_string(),
+                        message: format!(
+                            "¿Eliminar la tarea \"{}\"? Esta acción no se puede deshacer.",
+                            task.title
+                        ),
+                        confirm_label: "Eliminar".to_string(),
+                        on_cancel: move |_| confirm_delete.set(None),
+                        on_confirm: move |_| {
+                            confirm_delete.set(None);
+                            on_delete_task.call(id.clone());
+                        },
+                    }
                 }
             }
         }
