@@ -88,26 +88,29 @@ dx bundle --platform desktop --package-types deb --package-types rpm --package-t
 `.deb`, ~64 MB binary):
 
 ```
-<target>/dx/featherai/bundle/linux/deb/featherai_0.1.0_amd64.deb
-<target>/dx/featherai/bundle/linux/rpm/featherai-0.1.0-1.x86_64.rpm
-<target>/dx/featherai/bundle/linux/appimage/featherai_0.1.0_x86_64.AppImage
+<target>/dx/featherai/bundle/linux/deb/featherai_0.1.1_amd64.deb
+<target>/dx/featherai/bundle/linux/rpm/featherai-0.1.1-1.x86_64.rpm
+<target>/dx/featherai/bundle/linux/appimage/featherai_0.1.1_x86_64.AppImage
 ```
 
 Install:
 
 ```bash
-sudo apt install ./featherai_0.1.0_amd64.deb      # Debian / Ubuntu
-sudo dnf install ./featherai-0.1.0-1.x86_64.rpm   # Fedora / RHEL
-./featherai_0.1.0_x86_64.AppImage                 # portable, no install
-APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.0_x86_64.AppImage   # sin FUSE2
+sudo apt install ./featherai_0.1.1_amd64.deb      # Debian / Ubuntu
+sudo dnf install ./featherai-0.1.1-1.x86_64.rpm   # Fedora / RHEL
+./featherai_0.1.1_x86_64.AppImage                 # portable, no install
+APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.1_x86_64.AppImage   # sin FUSE2
 ```
 
 `dx` writes the `.deb`/`.rpm` itself (no `dpkg-deb`/`rpmbuild` needed); the
 AppImage step downloads `linuxdeploy`. `[bundle.deb].depends` declares the
 WebView libraries (`libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libxdo3`, `libssl3`,
 with `t64` alternatives for newer Debian/Ubuntu) because `dx` cannot infer them
-from the binary. The data directory (`~/.local/share/featherai`) is **not**
-removed by uninstalling.
+from the binary. The data directory — `~/.local/share/featherai` (or `$XDG_DATA_HOME/featherai`
+if set), `%LOCALAPPDATA%\featherai` on Windows — is **not** removed by
+uninstalling. Versions up to `v0.0.2` used `%APPDATA%\featherai` on Windows and
+`$HOME/.local/share/featherai` on any OS; on first run the app moves that legacy
+directory to the OS location above and logs the migration in `featherai.log`.
 
 ### Windows
 
@@ -120,7 +123,7 @@ dx bundle --platform desktop --package-types nsis --package-types msi --release
 ```
 
 Output in `target\dx\featherai\bundle\windows\`:
-`featherai_0.1.0_x64-setup.exe` (NSIS) and `featherai_0.1.0_x64_en-US.msi` (WiX).
+`Featherai_0.1.1_x64-setup.exe` (NSIS) and `Featherai_0.1.1_x64.msi` (WiX).
 `dx` downloads NSIS 3.11 and WiX 3.14 on first use. The `.exe`/`.msi` icon, name
 and version come from `[bundle]`/`[bundle.windows]` in `Dioxus.toml`
 (`identifier`, `icon_path`, `version`); they must stay stable across releases so
