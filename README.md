@@ -112,6 +112,16 @@ uninstalling. Versions up to `v0.0.2` used `%APPDATA%\featherai` on Windows and
 `$HOME/.local/share/featherai` on any OS; on first run the app moves that legacy
 directory to the OS location above and logs the migration in `featherai.log`.
 
+Con el driver propietario de NVIDIA, WebKitGTK deja la ventana en gris (X11) o
+rompe el sync explícito (Wayland). La app aplica el workaround en runtime, antes
+de crear la ventana (`webkit2gtk-nvidia-quirk`): `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+en X11 y `__NV_DISABLE_EXPLICIT_SYNC=1` en Wayland sin `egl-wayland2`. Si alguna
+de esas dos variables ya está definida en el entorno, la app **no** la toca: un
+valor explícito (incluido `WEBKIT_DISABLE_DMABUF_RENDERER=0`) manda. Por eso
+antes fallaba solo al lanzar desde el menú/AppImage —esas vías no heredan lo que
+el shell exporta— y andaba desde la terminal. Qué quedó aplicado se ve en
+`featherai.log`.
+
 ### Windows
 
 Prerequisites: the MSVC toolchain (`rustup default stable-msvc`), Visual Studio

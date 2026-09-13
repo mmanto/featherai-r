@@ -133,6 +133,35 @@ fn log_to_file(msg: &str) {
     let _ = writeln!(file, "[{secs}] {msg}");
 }
 
+/// Aplica el workaround de renderizado de WebKitGTK con el driver propietario
+/// de NVIDIA: en X11 (`WEBKIT_DISABLE_DMABUF_RENDERER=1`) y en Wayland sin
+/// `egl-wayland2` (`__NV_DISABLE_EXPLICIT_SYNC=1`).
+///
+/// Sin esto la app lanzada desde el menú del sistema o desde el `.AppImage`
+/// abre con la ventana en gris y sin componentes: esas vías no heredan lo que
+/// el usuario exporta en su shell (el clásico `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+/// en `.zshrc`), y el renderer DMA-BUF de WebKit falla con ese driver.
+/// Referencias: tauri-apps/tauri#9304, bugs.webkit.org #280210.
+///
+/// Debe correr **antes** de crear la ventana (WebKit lee las variables al
+/// inicializar el webview) y no toca nada si el usuario ya definió alguna de
+/// las dos: esa configuración manda.
+#[cfg(target_os = "linux")]
+fn quirk_webkit() {
+    let definido_por_el_usuario = [
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        "__NV_DISABLE_EXPLICIT_SYNC",
+    ]
+    .iter()
+    .any(|var| std::env::var(var).is_ok_and(|valor| !valor.trim().is_empty()));
+    if !definido_por_el_usuario {
+        webkit2gtk_nvidia_quirk::apply_workaround_with_options(Default::default());
+    }
+}
+
+#[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]
+fn quirk_webkit() {}
+
 /// Duplica los panics en `<data dir>/featherai.log` (stderr puede irse a un
 /// socket que nadie lee, como en el doble click de un `.AppImage`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -150,6 +179,9 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         install_diagnostics();
+        // Antes de crear la ventana: WebKit lee estas variables al inicializar
+        // el webview (sin esto, ventana gris con driver NVIDIA + X11).
+        quirk_webkit();
         // Antes de escribir el log: si la base quedó en un data dir heredado
         // (`$HOME/.local/share/featherai` en cualquier SO, o `%APPDATA%\featherai`),
         // se mueve al data dir del SO (ver `persistence::prepare_data_dir`).
@@ -160,6 +192,12 @@ fn main() {
             std::env::current_exe()
         ));
         log_to_file(&format!("main: data dir {data_dir:?}"));
+        #[cfg(target_os = "linux")]
+        log_to_file(&format!(
+            "main: webkit (WEBKIT_DISABLE_DMABUF_RENDERER={:?}, __NV_DISABLE_EXPLICIT_SYNC={:?})",
+            std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").ok(),
+            std::env::var("__NV_DISABLE_EXPLICIT_SYNC").ok()
+        ));
         for nota in &migracion {
             log_to_file(nota);
         }
