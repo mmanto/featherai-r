@@ -150,11 +150,19 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         install_diagnostics();
+        // Antes de escribir el log: si la base quedó en un data dir heredado
+        // (`$HOME/.local/share/featherai` en cualquier SO, o `%APPDATA%\featherai`),
+        // se mueve al data dir del SO (ver `persistence::prepare_data_dir`).
+        let (data_dir, migracion) = persistence::prepare_data_dir();
         log_to_file(&format!(
             "main: inicio (cwd={:?}, exe={:?})",
             std::env::current_dir(),
             std::env::current_exe()
         ));
+        log_to_file(&format!("main: data dir {data_dir:?}"));
+        for nota in &migracion {
+            log_to_file(nota);
+        }
         init_backend();
         log_to_file("main: backend GuardianDB listo; lanzando la ventana");
     }

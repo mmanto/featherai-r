@@ -146,25 +146,159 @@ impl Db {
 
 /// Directorio de datos por defecto de la app.
 ///
-/// Orden: `$FEATHRAI_DATA_DIR` (si está seteado) → `$HOME/.local/share/
-/// featherai` (unix) → `%APPDATA%\featherai` (windows) → `./featherai-data`.
+/// `$FEATHRAI_DATA_DIR` (si está seteado y no vacío) gana y desactiva la
+/// migración: es una elección explícita. Si no, el data dir del SO
+/// ([`os_data_dir`]) y, como último recurso, `./featherai-data`.
 pub fn default_data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FEATHRAI_DATA_DIR") {
-        if !dir.trim().is_empty() {
-            return PathBuf::from(dir);
+    if let Some(dir) = env_path("FEATHRAI_DATA_DIR") {
+        return dir;
+    }
+    os_data_dir().unwrap_or_else(|| PathBuf::from("./featherai-data"))
+}
+
+/// Data dir convencional del SO donde corre el binario.
+///
+/// El `cfg` es por SO, no por variable de entorno: hasta v0.0.1 se miraba
+/// `HOME` primero y sin distinguir el SO, así que en Windows lanzado desde un
+/// shell con `HOME` (Git Bash/MSYS) la base caía en `<HOME>\.local\share\…`
+/// mientras que un lanzamiento desde el menú Inicio usaba `%APPDATA%`: dos
+/// bases distintas para el mismo usuario.
+#[cfg(target_os = "windows")]
+fn os_data_dir() -> Option<PathBuf> {
+    // `LOCALAPPDATA`, no `APPDATA`: Roaming se sincroniza por red en perfiles
+    // móviles y no es lugar para un redb + las claves del nodo iroh.
+    env_path("LOCALAPPDATA").or_else(|| env_path("APPDATA"))
+}
+
+#[cfg(target_os = "macos")]
+fn os_data_dir() -> Option<PathBuf> {
+    env_path("HOME").map(|home| home.join("Library/Application Support/featherai"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn os_data_dir() -> Option<PathBuf> {
+    env_path("XDG_DATA_HOME")
+        // El spec XDG ignora valores relativos.
+        .filter(|p| p.is_absolute())
+        .map(|p| p.join("featherai"))
+        .or_else(|| env_path("HOME").map(|home| home.join(".local/share/featherai")))
+}
+
+/// Variable de entorno no vacía, como `PathBuf` (`None` si falta o es solo
+/// espacios: `APPDATA=""` daría un path relativo al CWD, no uno del SO).
+fn env_path(name: &str) -> Option<PathBuf> {
+    let raw = std::env::var(name).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+/// Prepara el data dir de esta corrida: resuelve el path y, si el layout nuevo
+/// todavía no tiene base, mueve la de un data dir heredado (hasta v0.0.1 la
+/// base podía estar en `$HOME/.local/share/featherai` — incluso en Windows — o
+/// en `%APPDATA%\featherai`).
+///
+/// Devuelve el path y las notas de la migración (vacío si no hubo nada que
+/// reportar) para que `main` las escriba en el log: el log vive dentro del
+/// data dir, que recién se crea acá.
+///
+/// Llamar una sola vez, al arrancar y antes de escribir cualquier cosa en el
+/// data dir.
+pub fn prepare_data_dir() -> (PathBuf, Vec<String>) {
+    let dir = default_data_dir();
+    // Con `FEATHRAI_DATA_DIR` el usuario eligió el directorio: no se le muda la
+    // base del SO a ese path.
+    if env_path("FEATHRAI_DATA_DIR").is_some() {
+        return (dir, Vec::new());
+    }
+    let notes = migrate_from_candidates(&dir, legacy_data_dirs());
+    (dir, notes)
+}
+
+/// Data dirs que usaron las versiones previas, en el orden de precedencia del
+/// código viejo (`HOME` primero, después `APPDATA`).
+fn legacy_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = env_path("HOME") {
+        dirs.push(home.join(".local/share/featherai"));
+    }
+    if let Some(appdata) = env_path("APPDATA") {
+        dirs.push(appdata.join("featherai"));
+    }
+    dirs
+}
+
+/// Mueve la base del primer candidato con base a `new_dir`, si ahí todavía no
+/// hay ninguna.
+///
+/// Entrada por entrada y no el directorio entero: el data dir nuevo puede
+/// existir ya de una corrida previa con solo el log, y en Windows `rename` de
+/// un directorio falla si el destino existe.
+fn migrate_from_candidates(new_dir: &Path, candidates: Vec<PathBuf>) -> Vec<String> {
+    let mut notes = Vec::new();
+    // Ya hay una base en el layout nuevo: no se toca nada.
+    if new_dir.join("guardian").exists() {
+        return notes;
+    }
+    let found: Vec<PathBuf> = candidates
+        .into_iter()
+        .filter(|dir| dir != new_dir && dir.join("guardian").exists())
+        .collect();
+    let Some((from, rest)) = found.split_first() else {
+        return notes;
+    };
+    if !rest.is_empty() {
+        notes.push(format!(
+            "migración: {} data dirs heredados con base ({found:?}); migro el primero",
+            found.len()
+        ));
+    }
+
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(e) => return vec![format!("migración: no pude leer {from:?}: {e}")],
+    };
+    if let Err(e) = std::fs::create_dir_all(new_dir) {
+        return vec![format!("migración: no pude crear {new_dir:?}: {e}")];
+    }
+
+    let (mut moved, mut skipped, mut failed) = (0usize, Vec::new(), Vec::new());
+    for entry in entries.flatten() {
+        let to = new_dir.join(entry.file_name());
+        if to.exists() {
+            // Nunca se pisa lo que ya está en el layout nuevo (p. ej. el log de
+            // esta corrida, creado antes de abrir la base).
+            skipped.push(entry.file_name().to_string_lossy().into_owned());
+            continue;
+        }
+        match std::fs::rename(entry.path(), &to) {
+            Ok(()) => moved += 1,
+            Err(e) => failed.push(format!("{:?}: {e}", entry.file_name())),
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            return PathBuf::from(home).join(".local/share/featherai");
-        }
+
+    if !skipped.is_empty() {
+        notes.push(format!(
+            "migración: ya existían en {new_dir:?}, no se pisaron ({})",
+            skipped.join(", ")
+        ));
     }
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        if !appdata.trim().is_empty() {
-            return PathBuf::from(appdata).join("featherai");
-        }
+    if failed.is_empty() {
+        // Solo borra el data dir viejo si quedó vacío.
+        let _ = std::fs::remove_dir(from);
+        notes.push(format!(
+            "migración: {moved} entradas movidas de {from:?} a {new_dir:?}"
+        ));
+    } else {
+        notes.push(format!(
+            "migración: quedaron entradas en {from:?} sin mover ({})",
+            failed.join(", ")
+        ));
     }
-    PathBuf::from("./featherai-data")
+    notes
 }
 
 /// Abre (o crea) la base GuardianDB en `data_dir` y devuelve el `Db` con
@@ -315,3 +449,6 @@ pub fn maybe_spawn_admin_rpc() {
         }
     });
 }
+
+#[cfg(test)]
+mod tests;
