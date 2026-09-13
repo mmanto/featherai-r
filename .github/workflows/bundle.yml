@@ -1,7 +1,8 @@
 name: Bundles
 
 # Los instaladores no se pueden cross-compilar: cada job corre `dx bundle` en su
-# propio SO. Disparo manual o al pushear un tag `v*`.
+# propio SO. El dispatch manual solo construye y sube artifacts; pushear un tag
+# `v*` además publica los instaladores como Release de ese tag.
 on:
   workflow_dispatch:
   push:
@@ -60,3 +61,33 @@ jobs:
           name: windows-bundles
           path: target/dx/featherai/bundle/windows/
           if-no-files-found: error
+
+  # Publica la Release del tag con los instaladores de ambos SO. Espera a los
+  # dos jobs para que todos los assets entren en la misma Release: si cada job
+  # publicara por su cuenta, los dos intentarían crearla en paralelo.
+  # `download-artifact` tiene que ser del mismo major que el `upload-artifact`
+  # de arriba (v4): majors distintos no comparten formato de artifacts.
+  release:
+    if: github.ref_type == 'tag'
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      # El GITHUB_TOKEN por defecto trae `contents: read`; crear la Release y
+      # subir assets requiere write.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          # Sin `name`: baja todos los artifacts del run a `artifacts/<nombre>/`.
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          # Notas autogeneradas (diff contra el tag anterior).
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
