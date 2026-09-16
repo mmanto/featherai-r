@@ -143,18 +143,18 @@ dx bundle --platform desktop --package-types deb --package-types rpm --package-t
 `.deb`, ~64 MB binary):
 
 ```
-<target>/dx/featherai/bundle/linux/deb/featherai_0.1.1_amd64.deb
-<target>/dx/featherai/bundle/linux/rpm/featherai-0.1.1-1.x86_64.rpm
-<target>/dx/featherai/bundle/linux/appimage/featherai_0.1.1_x86_64.AppImage
+<target>/dx/featherai/bundle/linux/deb/featherai_0.1.2_amd64.deb
+<target>/dx/featherai/bundle/linux/rpm/featherai-0.1.2-1.x86_64.rpm
+<target>/dx/featherai/bundle/linux/appimage/featherai_0.1.2_x86_64.AppImage
 ```
 
 Install:
 
 ```bash
-sudo apt install ./featherai_0.1.1_amd64.deb      # Debian / Ubuntu
-sudo dnf install ./featherai-0.1.1-1.x86_64.rpm   # Fedora / RHEL
-./featherai_0.1.1_x86_64.AppImage                 # portable, no install
-APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.1_x86_64.AppImage   # sin FUSE2
+sudo apt install ./featherai_0.1.2_amd64.deb      # Debian / Ubuntu
+sudo dnf install ./featherai-0.1.2-1.x86_64.rpm   # Fedora / RHEL
+./featherai_0.1.2_x86_64.AppImage                 # portable, no install
+APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.2_x86_64.AppImage   # sin FUSE2
 ```
 
 `dx` writes the `.deb`/`.rpm` itself (no `dpkg-deb`/`rpmbuild` needed); the
@@ -188,7 +188,7 @@ dx bundle --platform desktop --package-types nsis --package-types msi --release
 ```
 
 Output in `target\dx\featherai\bundle\windows\`:
-`Featherai_0.1.1_x64-setup.exe` (NSIS) and `Featherai_0.1.1_x64.msi` (WiX).
+`Featherai_0.1.2_x64-setup.exe` (NSIS) and `Featherai_0.1.2_x64.msi` (WiX).
 `dx` downloads NSIS 3.11 and WiX 3.14 on first use. The `.exe`/`.msi` icon, name
 and version come from `[bundle]`/`[bundle.windows]` in `Dioxus.toml`
 (`identifier`, `icon_path`, `version`); they must stay stable across releases so
