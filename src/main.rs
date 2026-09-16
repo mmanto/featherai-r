@@ -27,6 +27,10 @@ mod demo;
 /// En web/wasm la UI conserva el comportamiento demo en memoria.
 #[cfg(not(target_arch = "wasm32"))]
 mod persistence;
+/// Red de pares: mDNS en la red interna + conexión explícita, previa a la
+/// apertura de los stores — solo nativo.
+#[cfg(not(target_arch = "wasm32"))]
+mod net;
 #[cfg(not(target_arch = "wasm32"))]
 mod services;
 
@@ -47,6 +51,9 @@ fn init_backend() {
             .build()
             .expect("runtime tokio de featherai")
     });
+    // Antes de abrir la base: captura también las trazas de la apertura de
+    // stores (importación de espacios, descubrimiento).
+    init_network_log();
     let dir = persistence::default_data_dir();
     let db = rt
         .block_on(persistence::open(dir))
@@ -57,6 +64,7 @@ fn init_backend() {
     let initial = rt
         .block_on(services::project::list_projects(&db))
         .expect("listado inicial de proyectos");
+    log_to_file(&format!("main: {}", db.peers_summary()));
     persistence::set_global(db, initial);
     // Opt-in: `FEATHRAI_SENTINEL_PORT=15433` expone el Admin RPC de sentinel
     // para `guardian-sentinel --connect` (inspección en vivo, sin tocar el
@@ -157,6 +165,48 @@ fn quirk_webkit() {
     if !definido_por_el_usuario {
         webkit2gtk_nvidia_quirk::apply_workaround_with_options(Default::default());
     }
+}
+
+/// Log de red opt-in: `FEATHRAI_LOG=info|debug|trace` (o `1`) agrega las
+/// trazas de iroh/guardian-db a `<data dir>/featherai.log`.
+///
+/// Es lo que permite diagnosticar la red de pares sin recompilar: qué pares se
+/// descubren/conectan y si este nodo importó un espacio compartido o creó uno
+/// propio ("possible split-brain" en el log significa que no encontró pares al
+/// abrir). Sin la variable no se instala ningún subscriber: cero costo.
+#[cfg(not(target_arch = "wasm32"))]
+fn init_network_log() {
+    use std::str::FromStr;
+    use tracing_subscriber::filter::LevelFilter;
+
+    let Some(valor) = std::env::var("FEATHRAI_LOG").ok().filter(|v| !v.trim().is_empty()) else {
+        return;
+    };
+    let nivel = match valor.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "info" => LevelFilter::INFO,
+        "debug" => LevelFilter::DEBUG,
+        "trace" => LevelFilter::TRACE,
+        // Valor no reconocido: no se toca nada (ni siquiera `warn`).
+        _ => LevelFilter::from_str(&valor).unwrap_or(LevelFilter::INFO),
+    };
+
+    let path = crate::persistence::default_data_dir().join("featherai.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let writer = move || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap_or_else(|_| std::fs::File::create("/dev/null").expect("null"))
+    };
+    // `try_init`: si otro subscriber ya está instalado (tests, DX), se ignora.
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(writer)
+        .with_max_level(nivel)
+        .try_init();
 }
 
 #[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]

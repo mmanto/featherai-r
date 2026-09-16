@@ -6,13 +6,14 @@
 //! ```
 
 use crate::models::{Priority, Project, ProjectStatus, StoredUser, Task, TaskStatus};
+use crate::net::Join;
 use crate::persistence::{open_with_config, AppError, Db};
 use guardian_db::p2p::network::config::ClientConfig;
 
 /// Abre una base sobre un directorio temporal con el preset `offline`
 /// (persistente en disco; el TempDir vive mientras dure el test).
 async fn open_db(dir: &std::path::Path) -> Db {
-    open_with_config(dir.to_path_buf(), ClientConfig::offline())
+    open_with_config(dir.to_path_buf(), ClientConfig::offline(), Join::OFF)
         .await
         .expect("abrir GuardianDB offline")
 }

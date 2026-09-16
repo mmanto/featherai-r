@@ -52,6 +52,61 @@ To run for a different platform, use the `--platform platform` flag. E.g.
 dx serve --platform desktop
 ```
 
+## Sincronización entre nodos (GuardianDB / Iroh)
+
+Cada instalación es local-first: escribe en su data dir (`~/.local/share/featherai`,
+`%LOCALAPPDATA%\featherai` o `$FEATHRAI_DATA_DIR`) y replica peer-to-peer contra los
+nodos que conoce. El **espacio de datos** de cada store (namespace de iroh-docs) se
+resuelve al abrirlo, contra los pares conectados en ese momento; por eso la app conecta
+los pares *antes* de abrir la base (`src/net.rs`).
+
+### Cómo se encuentran los dos nodos
+
+- **Misma red interna (sin configurar nada):** descubrimiento mDNS propio (servicio
+  `featherai`). Necesita multicast entre los equipos: misma VLAN/SSID, sin aislamiento de
+  clientes y con el puerto 5353/UDP permitido.
+- **Otra red (o mDNS bloqueado):** en *Ajustes → Nodos pares* se pega el id del otro nodo
+  (el que muestra su Ajustes). Queda guardado en `<data dir>/peers.txt` y se reconecta en
+  cada arranque. Equivalente por entorno: `FEATHRAI_PEERS=<id>[,<id>…]`.
+- `FEATHRAI_LAN_WAIT_MS` (por defecto `2500`): espera del descubrimiento LAN antes de
+  abrir la base. `0` no espera (sólo conecta lo que ya esté en `peers.txt`/`FEATHRAI_PEERS`).
+
+### Qué esperar al conectar dos instalaciones
+
+- Cuando un nodo ve al otro **al arrancar**, importa su espacio: a partir de ahí los dos
+  listan los mismos proyectos/tareas/usuarios y escriben en los dos sentidos (LWW por
+  registro). Los datos que el nodo importador tenía en su espacio propio quedan en disco
+  pero dejan de listarse — si hay datos propios en ambos lados, hacer backup del data dir
+  antes de conectarlos.
+- Un par que aparece **después** del arranque queda conectado, pero se une al espacio
+  compartido recién en el próximo arranque (Ajustes lo marca: "se une a este espacio en
+  el próximo arranque").
+- Con más de dos nodos, todos los que vean a alguno del grupo terminan en el mismo espacio.
+
+### Diagnóstico
+
+`FEATHRAI_LOG=info|debug|trace` (o `1`) agrega las trazas de iroh/guardian-db a
+`featherai.log`; sin la variable no hay logs de red. Qué mirar:
+
+- `main: pares: N configurados (M con conexión), K por red interna; mDNS: sí|no` — cuántos
+  pares ve este nodo y cuántos quedaron conectados.
+- `Imported shared iroh-docs document via ticket` — se unió al espacio de un par;
+  `Created new iroh-docs document` — creó un espacio propio (no había pares al abrir);
+  `possible split-brain` — había un par que no respondió a tiempo (se repara reiniciando).
+- `sin conexión con el par …` / `mDNS no disponible` (líneas de `src/net.rs`).
+
+`FEATHRAI_SENTINEL_PORT=<puerto>` expone el Admin RPC de sentinel para inspeccionar la
+base en vivo: `guardian-sentinel --connect 127.0.0.1:<puerto>` (las trazas de la app dicen
+`sentinel RPC activo en 127.0.0.1:<puerto>`). El proceso que tiene abierta la base sigue
+siendo la app, así que este modo adjunto es el único que lee **esta** base: el modo
+`guardian-sentinel --data-dir <dir>` abre `<dir>/db`, mientras la app usa
+`<dir>/guardian` + `<dir>/iroh` (además chocaría con el lock redb del `iroh/`).
+
+Los tests de convergencia entre dos nodos (red real en loopback) están en
+`src/persistence/peers_tests.rs`; correr con
+`cargo test --bin featherai peers_tests -- --test-threads=1` (el de mDNS requiere
+multicast: agregar `--ignored`).
+
 ## Building installers (Linux / Windows)
 
 `dx bundle` packages the app **for the operating system that runs the command**.

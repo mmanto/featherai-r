@@ -12,6 +12,13 @@
 //! Escrituras locales con LWW por doc; las ops sobre un mismo proyecto se
 //! serializan con un mutex tokio por id ([`Db::lock_project`]).
 //!
+//! # Red de pares
+//! Antes de abrir los stores, `open` conecta los pares configurados y los
+//! descubiertos en la red interna ([`crate::net`]): el namespace de iroh-docs
+//! de cada store KeyValue se resuelve en ese momento, contra los pares
+//! conocidos. `Db::peers`/`add_peer`/`connect_peer`/`forget_peer` son la
+//! superficie que usa Ajustes.
+//!
 //! # Globals
 //! La app abre la base una sola vez en `init_backend` (main.rs) y la
 //! registra con [`set_global`]; las vistas la leen con [`db`]. En
@@ -50,6 +57,8 @@ pub struct Db {
     pub(crate) client: IrohClient,
     pub(crate) node_id: String,
     pub(crate) data_dir: PathBuf,
+    /// Red de pares de esta corrida (ids, conexiones y descubrimiento LAN).
+    pub(crate) peers: crate::net::Peers,
     /// Serializa las ops de escritura por proyecto (hashmap con mutex por id).
     project_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -63,6 +72,8 @@ pub enum AppError {
     Serde(String),
     /// Entidad requerida que no existe (proyecto/tarea).
     NotFound(String),
+    /// Entrada de usuario inválida (p. ej. id de nodo par).
+    Invalid(String),
 }
 
 impl std::fmt::Display for AppError {
@@ -71,6 +82,7 @@ impl std::fmt::Display for AppError {
             Self::Store(e) => write!(f, "store: {e}"),
             Self::Serde(e) => write!(f, "json: {e}"),
             Self::NotFound(e) => write!(f, "no encontrado: {e}"),
+            Self::Invalid(e) => write!(f, "inválido: {e}"),
         }
     }
 }
@@ -92,6 +104,44 @@ impl Db {
     /// Directorio de datos de esta instalación.
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Pares de sincronización de esta corrida (Ajustes → Sincronización).
+    /// Ver [`crate::net`] para el porqué del orden (conectar antes de abrir).
+    pub fn peers(&self) -> Vec<crate::net::Peer> {
+        self.peers.peers()
+    }
+
+    /// Resumen de la red de pares para el log de arranque.
+    pub fn peers_summary(&self) -> String {
+        self.peers.summary()
+    }
+
+    /// Guarda un par (id del otro nodo, como lo muestra Ajustes acá) y lo
+    /// conecta. Devuelve el id canónico y si la conexión se estableció (el par
+    /// queda guardado igual: se reintenta en el próximo arranque).
+    pub async fn add_peer(&self, raw: &str) -> Result<(String, bool), AppError> {
+        let id = parse_peer_id(raw)?;
+        let conectado = self.peers.save(id).await.map_err(AppError::Store)?;
+        Ok((id.to_string(), conectado))
+    }
+
+    /// Conecta un par ya configurado (`peers.txt`/`FEATHRAI_PEERS`) o visto en
+    /// la red interna; no lo guarda.
+    pub async fn connect_peer(&self, raw: &str) -> Result<String, AppError> {
+        let id = parse_peer_id(raw)?;
+        self.peers
+            .connect(id)
+            .await
+            .map_err(AppError::Store)?;
+        Ok(id.to_string())
+    }
+
+    /// Olvida un par guardado desde Ajustes (no toca `FEATHRAI_PEERS`).
+    pub fn forget_peer(&self, raw: &str) -> Result<String, AppError> {
+        let id = parse_peer_id(raw)?;
+        self.peers.forget(id).map_err(AppError::Store)?;
+        Ok(id.to_string())
     }
 
     /// Cierre ordenado: cierra los tres stores y hace shutdown del backend
@@ -142,6 +192,13 @@ impl Db {
         };
         mtx.lock_owned().await
     }
+}
+
+/// Id de nodo par tal como lo muestra Ajustes en el otro nodo (hex de 64 o
+/// base32) — [`crate::net::parse_peer`] con error de dominio.
+fn parse_peer_id(raw: &str) -> Result<iroh::EndpointId, AppError> {
+    crate::net::parse_peer(raw)
+        .ok_or_else(|| AppError::Invalid(format!("id de nodo (64 hex): {raw}")))
 }
 
 /// Directorio de datos por defecto de la app.
@@ -312,15 +369,33 @@ pub async fn open(data_dir: PathBuf) -> Result<Db, AppError> {
     // ClientConfig::development(): mDNS on (descubrimiento local), n0 off,
     // puerto aleatorio. El preset por defecto apunta a ./tmp/iroh_dev; se
     // redirige al data dir de la instalación en open_with_config.
-    open_with_config(data_dir, ClientConfig::development()).await
+    // `crate::net::Join::app()`: pares configurados + descubrimiento en la red
+    // interna, conectados antes de abrir los stores (ver `crate::net`).
+    open_with_config(data_dir, ClientConfig::development(), crate::net::Join::app()).await
 }
 
 /// Variante de [`open`] con configuración de red explícita (los tests usan
-/// el preset `offline` para no tocar mDNS/redes).
+/// el preset `offline` + [`crate::net::Join::OFF`] para no tocar mDNS/redes).
 pub(crate) async fn open_with_config(
     data_dir: PathBuf,
     config: ClientConfig,
+    join: crate::net::Join,
 ) -> Result<Db, AppError> {
+    let client = open_client(&data_dir, config).await?;
+    // Pares ANTES de abrir los stores: `resolve_shared_ticket` (namespace de
+    // iroh-docs de cada store KeyValue) consulta a los pares conocidos en ese
+    // momento; ver el doc de `crate::net`.
+    let peers = crate::net::Peers::start(&client, &data_dir, join).await;
+    open_stores(data_dir, client, peers).await
+}
+
+/// Etapa 1 de [`open_with_config`]: data dirs + cliente Iroh (endpoint,
+/// docs, gossip) y su NodeId. Queda separada para que los tests conecten
+/// pares con direcciones explícitas **antes** de [`open_stores`].
+pub(crate) async fn open_client(
+    data_dir: &Path,
+    config: ClientConfig,
+) -> Result<IrohClient, AppError> {
     let guardian_dir = data_dir.join("guardian");
     let iroh_dir = data_dir.join("iroh");
     std::fs::create_dir_all(&guardian_dir)
@@ -333,7 +408,17 @@ pub(crate) async fn open_with_config(
     // cliente y se pasa en las opciones de `GuardianDB` (fachada) junto con
     // el directorio de la base (`guardian/`).
     let config = config.with_data_path(&iroh_dir);
-    let client = IrohClient::new(config).await.map_err(AppError::from)?;
+    IrohClient::new(config).await.map_err(AppError::from)
+}
+
+/// Etapa 2 de [`open_with_config`]: abre GuardianDB y los tres stores sobre un
+/// cliente ya conectado a sus pares, siembra demo/admin si están vacíos.
+pub(crate) async fn open_stores(
+    data_dir: PathBuf,
+    client: IrohClient,
+    peers: crate::net::Peers,
+) -> Result<Db, AppError> {
+    let guardian_dir = data_dir.join("guardian");
     let backend = client.backend().clone();
     let node_id = client.node_id().to_string();
 
@@ -367,6 +452,7 @@ pub(crate) async fn open_with_config(
         client,
         node_id,
         data_dir,
+        peers,
         project_locks: std::sync::Mutex::new(HashMap::new()),
     };
 
@@ -452,3 +538,6 @@ pub fn maybe_spawn_admin_rpc() {
 
 #[cfg(test)]
 mod tests;
+/// Convergencia entre dos nodos (red real en loopback); ver el doc del módulo.
+#[cfg(test)]
+mod peers_tests;

@@ -31,6 +31,18 @@ uuid = { version = "1", features = ["v4"] }
 # (salt generation en `services::auth`) vía unificación de features.
 rand_core = { version = "0.6", features = ["getrandom"] }
 
+# Red de pares (`src/net.rs`): los tipos de Iroh (EndpointId) y el
+# descubrimiento mDNS de nodos feathrai en la red interna. Mismas versiones
+# que las que ya resuelve guardian-db (Cargo.lock las fija).
+iroh = "1.1"
+iroh-mdns-address-lookup = "0.4"
+# `StreamExt::next` del stream de descubrimiento mDNS; ya está en el árbol
+# vía iroh/guardian-db.
+futures-lite = "2"
+# Log de red opt-in (`FEATHRAI_LOG=info|debug|trace`): trazas de iroh/
+# guardian-db al `<data dir>/featherai.log`. Sin la variable no se instala.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
 # Workarounds de renderizado de WebKitGTK con el driver propietario de NVIDIA
 # (en X11 deja la ventana en gris; en Wayland rompe el sync explícito). Sin
 # dependencias: detecta driver y sesión por sysfs/env. Ver `quirk_webkit`.
