@@ -1,5 +1,4 @@
 use crate::components::layout::state::{use_auth, use_current_path, use_sidebar, SIDEBAR_SECTIONS};
-use crate::components::layout::user_menu::UserMenu;
 use dioxus::prelude::*;
 
 /// Barra lateral de navegación — port de `Sidebar.tsx` de feathrai-frontend.
@@ -64,11 +63,6 @@ pub fn Sidebar() -> Element {
                         }
                     }
                 }
-            }
-
-            // ── Pie: menú de usuario ──
-            div { class: "app-sidebar-footer",
-                UserMenu { collapsed: collapsed() }
             }
         }
     }

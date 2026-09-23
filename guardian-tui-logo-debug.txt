@@ -1,0 +1,3 @@
+protocol=Halfblocks · CHOSEN cell 10x20px
+query_font=10x20 · window_size=Some((120, 40, 0, 0)) · ws_font=None · override=None
+(force: GUARDIAN_TUI_PROTO=sixel|halfblocks · GUARDIAN_TUI_FONT=WxH)

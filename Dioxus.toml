@@ -43,6 +43,36 @@ icon = ["assets/icons/icon.png"]
 [bundle.windows]
 icon_path = "assets/favicon.ico"
 
+# Android: `dx bundle --platform android --release --package-types apk`.
+# Sin `--package-types apk` dx empaqueta un `.aab` (el default de release para
+# android), que `adb install` rechaza: hace falta `bundletool` para sacarle
+# APKs. El APK sale en
+# `<target>/dx/featherai/release/android/app/app/build/outputs/apk/debug/`: el
+# variant de Gradle es `debug` (queda firmado con el keystore debug, sirve para
+# `adb install`; para Play Store va el `.aab` firmado con el keystore propio),
+# pero el `.so` es del perfil `android-release`.
+# dx compila para el triple del host: acá `x86_64-linux-android`, así que ese
+# APK corre en emulador x86_64 y no en un teléfono arm64 (`native-code:
+# 'x86_64'` en el manifest; Android lo rechaza con
+# INSTALL_FAILED_NO_MATCHING_ABIS, "la app no es compatible con tu teléfono").
+# Para el teléfono, agregar `--target aarch64-linux-android`.
+# dx **no** limpia `app/src/main/jniLibs/`: cada `.so` que quede ahí se
+# empaqueta, así que tras un build x86_64 + uno arm64 el APK sale universal
+# (65 MB, con las dos ABIs) y un build posterior de una sola ABI sigue
+# arrastrando la otra. Para un APK de una sola ABI, borrar el directorio de la
+# ABI que no va antes de bundlear.
+# Sin sección `[android]` dx usa su
+# default (compileSdk/targetSdk 34); con 34 el APK se instala pero el
+# PackageManager del emulador (API 36/37) no lo resuelve: `pm path` y
+# `am start` fallan y la app no arranca. Los mismos valores que usa el otro
+# proyecto mobile de esta máquina (gastronomico/mobile).
+# `min_sdk = 24` es el minimum que soporta wry/tao; el toolchain del NDK que
+# elige dx compila contra API 28.
+[android]
+min_sdk = 24
+target_sdk = 35
+compile_sdk = 35
+
 # Depends del .deb: dioxus-cli no los deduce del binario. Son las libs que el
 # WebView del sistema linkea dinámicamente (ver `ldd usr/bin/featherai`).
 # Las alternativas `|` cubren el renombre t64 de Debian trixie / Ubuntu 24.10+.

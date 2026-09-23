@@ -1,5 +1,5 @@
-//! Tests de la migración de data dirs heredados (layout previo a v0.0.1 →
-//! layout por SO). Correr con:
+//! Tests de la resolución de data dirs: la migración de los heredados (layout
+//! previo a v0.0.1 → layout por SO) y el path interno de Android. Correr con:
 //!
 //! ```text
 //! cargo test --bin featherai persistence
@@ -9,7 +9,7 @@
 //! los tests en paralelo): [`migrate_from_candidates`] recibe los paths
 //! explícitos, que es lo único que depende del filesystem.
 
-use super::migrate_from_candidates;
+use super::{android_files_dir, migrate_from_candidates};
 
 /// Arma un data dir "con base": `guardian/` (el store redb), un archivo suelto
 /// adentro y el log en la raíz — el layout que deja `open` en el data dir.
@@ -112,5 +112,22 @@ fn migra_aunque_el_data_dir_nuevo_ya_tenga_el_log() {
     assert!(
         viejo.join("featherai.log").exists(),
         "lo que no se pudo mover queda en el viejo"
+    );
+}
+
+/// El data dir de Android ubica el directorio del usuario **por uid**
+/// (`uid = userId * 100000 + appId`), no en un `/data/data` fijo: un perfil de
+/// trabajo o un usuario secundario no comparten el data dir del 0.
+#[test]
+fn el_data_dir_de_android_sale_del_uid() {
+    assert_eq!(
+        android_files_dir("com.featherai.app", 10045),
+        std::path::PathBuf::from("/data/user/0/com.featherai.app/files"),
+        "uid del usuario 0 (emulador, teléfono personal)"
+    );
+    assert_eq!(
+        android_files_dir("com.featherai.app", 1010045),
+        std::path::PathBuf::from("/data/user/10/com.featherai.app/files"),
+        "uid de un perfil de trabajo (userId 10, mismo appId)"
     );
 }

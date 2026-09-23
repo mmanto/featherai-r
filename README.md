@@ -95,12 +95,35 @@ los pares *antes* de abrir la base (`src/net.rs`).
   `possible split-brain` — había un par que no respondió a tiempo (se repara reiniciando).
 - `sin conexión con el par …` / `mDNS no disponible` (líneas de `src/net.rs`).
 
-`FEATHRAI_SENTINEL_PORT=<puerto>` expone el Admin RPC de sentinel para inspeccionar la
-base en vivo: `guardian-sentinel --connect 127.0.0.1:<puerto>` (las trazas de la app dicen
-`sentinel RPC activo en 127.0.0.1:<puerto>`). El proceso que tiene abierta la base sigue
-siendo la app, así que este modo adjunto es el único que lee **esta** base: el modo
-`guardian-sentinel --data-dir <dir>` abre `<dir>/db`, mientras la app usa
-`<dir>/guardian` + `<dir>/iroh` (además chocaría con el lock redb del `iroh/`).
+### Inspección en vivo (Guardian Sentinel)
+
+`FEATHRAI_SENTINEL_PORT=<puerto>` expone el Admin RPC de sentinel sobre la base ya abierta
+(las trazas de la app dicen `sentinel RPC activo en 127.0.0.1:<puerto>`; loopback, sin
+token). El panel se conecta en otra terminal:
+
+```bash
+FEATHRAI_SENTINEL_PORT=15433 dx serve --platform desktop   # o el binario instalado
+guardian-sentinel --connect 127.0.0.1:15433                # panel TUI adjunto
+```
+
+El binario `guardian-sentinel` sale del repo de guardian-db, en la versión que fija
+`Cargo.lock` (`cargo run --features sentinel --bin guardian-sentinel -- --connect …`), o
+del tarball `dist/guardian-db-<versión>/bin/guardian-sentinel`. El panel arranca en modo
+adjunto (`Source: rpc: 127.0.0.1:<puerto>`) y lista los tres stores con su número de
+entradas; `Enter` sobre un store abre el inspector que le corresponde (`↑↓`/`jk` mueve,
+`n`/`e`/`d` escribe/edita/borra, `Enter` ve el doc, `/` busca, `r` refresca, `?` ayuda,
+`q` sale). Los tres stores de la app son **keyvalue**, así que el inspector de esta base es
+el KeyValue (`docs.list` responde `not a Document store` si se pide por tipo). F2 es la
+topología de conexiones (direct/relay, latencia p95/p99), F3 el monitor de replicación
+(pares, `s` fuerza un sync) y F7 el bus de eventos.
+
+El proceso que tiene abierta la base sigue siendo la app, así que este modo adjunto es el
+único que lee **esta** base: el modo `guardian-sentinel --data-dir <dir>` abre `<dir>/db`,
+mientras la app usa `<dir>/guardian` + `<dir>/iroh` (además chocaría con el lock redb del
+`iroh/`). Dos consecuencias de que sea la misma base: lo que se escribe desde el panel cae
+en los docs que la app lista —un JSON con el formato equivocado rompe el listado de esa
+vista— y el RPC no expone el progreso de sync en vivo, así que en modo adjunto los stores
+se muestran como `Synced` con los contadores de replicación en 0.
 
 Los tests de convergencia entre dos nodos (red real en loopback) están en
 `src/persistence/peers_tests.rs`; correr con
@@ -162,7 +185,8 @@ AppImage step downloads `linuxdeploy`. `[bundle.deb].depends` declares the
 WebView libraries (`libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libxdo3`, `libssl3`,
 with `t64` alternatives for newer Debian/Ubuntu) because `dx` cannot infer them
 from the binary. The data directory — `~/.local/share/featherai` (or `$XDG_DATA_HOME/featherai`
-if set), `%LOCALAPPDATA%\featherai` on Windows — is **not** removed by
+if set), `%LOCALAPPDATA%\featherai` on Windows,
+`/data/user/<user>/<package>/files` on Android — is **not** removed by
 uninstalling. Versions up to `v0.0.2` used `%APPDATA%\featherai` on Windows and
 `$HOME/.local/share/featherai` on any OS; on first run the app moves that legacy
 directory to the OS location above and logs the migration in `featherai.log`.

@@ -49,6 +49,12 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk-nvidia-quirk = "2"
 
+# `getuid` para el data dir interno de Android
+# (`/data/user/<usuario>/<package>/files`): el uid ubica el directorio del
+# usuario que corre el proceso. Ya está en el árbol vía tokio/guardian-db.
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
 # NOTA (Windows): `wmi` (iroh -> netwatch) declara `windows` y `windows-core`
 # como rangos anchos e independientes (">=0.59, <0.63"); si Cargo los resuelve
 # en minors distintos el crate no compila ("multiple different versions of

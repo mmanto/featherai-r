@@ -232,13 +232,63 @@ fn os_data_dir() -> Option<PathBuf> {
     env_path("HOME").map(|home| home.join("Library/Application Support/featherai"))
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "android")]
+fn os_data_dir() -> Option<PathBuf> {
+    // Sin `XDG_DATA_HOME` en el proceso, el branch unix de abajo devolvería
+    // `./featherai-data` relativo al cwd (en Android, `/`, de solo lectura):
+    // `open_client` no podría crear `guardian/` e `iroh/` y la app moriría en
+    // `init_backend` sin llegar a mostrar la ventana. Ver
+    // [`android_files_dir`].
+    // `getuid` viene `unsafe` en la firma de libc, no por el llamado: es un
+    // syscall sin precondiciones que no puede fallar.
+    let uid = unsafe { libc::getuid() };
+    Some(android_files_dir(&android_package_name()?, uid))
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 fn os_data_dir() -> Option<PathBuf> {
     env_path("XDG_DATA_HOME")
         // El spec XDG ignora valores relativos.
         .filter(|p| p.is_absolute())
         .map(|p| p.join("featherai"))
         .or_else(|| env_path("HOME").map(|home| home.join(".local/share/featherai")))
+}
+
+/// Data dir interno de la app en Android — el `getFilesDir()` de Java:
+/// `/data/user/<usuario>/<package>/files`.
+///
+/// No es `<data dir del SO>` como en desktop y por eso no sale de una variable
+/// de entorno: Android no define `XDG_DATA_HOME` y el `HOME` del proceso (si
+/// existe) no es un directorio escribible.
+///
+/// El directorio del usuario sale del uid y no de un `/data/data` fijo
+/// (`/data/data` es el alias de `/data/user/0`): `uid = userId * 100000 +
+/// appId`, así que un perfil de trabajo o un usuario secundario (userId ≠ 0)
+/// usa `/data/user/<userId>/…`.
+///
+/// [`getFilesDir`]: https://developer.android.com/reference/android/content/Context#getFilesDir()
+#[cfg(any(target_os = "android", test))]
+fn android_files_dir(pkg: &str, uid: u32) -> PathBuf {
+    PathBuf::from(format!("/data/user/{}", uid / 100_000))
+        .join(pkg)
+        .join("files")
+}
+
+/// Package name del proceso que corre la app (`com.featherai.app`: el
+/// `identifier` de `[bundle]` en `Dioxus.toml`).
+///
+/// Sale de `argv[0]` (`/proc/self/cmdline`), que Android setea al package name
+/// en el fork de zygote — antes de que la `Activity` cargue la lib nativa, o
+/// sea antes de `init_backend`. JNI queda descartado a propósito: el contexto
+/// de Java recién está disponible cuando el event loop ya se creó, y la base se
+/// abre antes que la ventana.
+#[cfg(target_os = "android")]
+fn android_package_name() -> Option<String> {
+    let cmdline = std::fs::read("/proc/self/cmdline").ok()?;
+    // `cmdline` es NUL-separado: el primer campo es `argv[0]`.
+    let argv0 = cmdline.split(|byte| *byte == 0).next()?;
+    let pkg = std::str::from_utf8(argv0).ok()?.trim();
+    (!pkg.is_empty()).then(|| pkg.to_owned())
 }
 
 /// Variable de entorno no vacía, como `PathBuf` (`None` si falta o es solo
