@@ -1,8 +1,8 @@
 [package]
 name = "featherai"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Martín Mantovani <martin.mantovani@gmail.com>"]
-edition = "2021"
+edition = "2026"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
