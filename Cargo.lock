@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "featherai"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "argon2",
  "dioxus",
