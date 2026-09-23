@@ -191,9 +191,9 @@ lo compila, y esa `libwebkit2gtk` trae hardcodeado el directorio de sus procesos
 helper (`/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1` en Ubuntu), que no existe en
 Arch/Fedora/… y hace que el AppImage no arranque
 (`ERROR **: Unable to spawn a new child process …/WebKitNetworkProcess`). Por
-eso, tras el bundle, `scripts/fix-appimage-system-webview.sh` vacía esas libs
-empaquetadas (salvo `libxdo`, ver arriba) y re-empaqueta el AppImage; CI lo
-corre solo
+eso, tras el bundle, `scripts/fix-appimage-system-webview.sh` borra las `.so`
+empaquetadas (conservando `libxdo` y los assets web de la app, que linuxdeploy
+deja en `usr/lib/<AppName>/assets`) y re-empaqueta el AppImage; CI lo corre solo
 (`.github/workflows/bundle.yml`). En un build local, correrlo a mano:
 
 ```bash

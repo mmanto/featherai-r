@@ -12,17 +12,23 @@
 # WEBKIT_EXEC_PATH no sirve: WebKitGTK solo la respeta en builds con
 # ENABLE(DEVELOPER_MODE), no en los paquetes de las distros.
 #
-# Fix: vaciar las libs empaquetadas (usr/lib) —salvo `libxdo`— y re-empaquetar
-# con appimagetool. El binario queda con RUNPATH `$ORIGIN/../lib` apuntando a un
-# directorio que ya no trae el stack, así que el loader cae a las rutas del
-# sistema y usa el WebKitGTK instalado — igual que el .deb/.rpm, que declaran
-# libwebkit2gtk-4.1-0, libgtk-3-0, libxdo3 y libssl3 en `depends`.
+# Fix: borrar las `.so` empaquetadas de usr/lib (el stack GTK/WebKit) y
+# re-empaquetar con appimagetool. El binario queda con RUNPATH `$ORIGIN/../lib`
+# apuntando a un directorio que ya no trae el stack, así que el loader cae a las
+# rutas del sistema y usa el WebKitGTK instalado — igual que el .deb/.rpm, que
+# declaran libwebkit2gtk-4.1-0, libgtk-3-0, libxdo3 y libssl3 en `depends`.
 #
-# Por qué se conserva `libxdo` (única excepción): no es parte del stack
-# GTK/WebKit y el sistema **no** la garantiza por soname. El runner de build
-# (Ubuntu) linkea `libxdo.so.3`, mientras que Arch ya sólo provee
-# `libxdo.so.4` (xdotool >= 4); sin la copia empaquetada el AppImage muere al
-# arrancar con "libxdo.so.3: cannot open shared object file" (exit 127).
+# Dos excepciones que se conservan dentro de usr/lib:
+#
+# - `libxdo`: no es parte del stack GTK/WebKit y el sistema **no** la garantiza
+#   por soname. El runner de build (Ubuntu) linkea `libxdo.so.3`, mientras que
+#   Arch ya sólo provee `libxdo.so.4` (xdotool >= 4); sin la copia empaquetada
+#   el AppImage muere al arrancar con
+#   "libxdo.so.3: cannot open shared object file" (exit 127).
+# - `usr/lib/<AppName>/assets`: los assets web de la app (CSS, fuentes, ícono).
+#   No son librerías: borrarlos deja la UI **sin estilos** (el login no lo
+#   delata porque usa estilos inline; la grilla y el resto sí). Por eso el
+#   borrado es selectivo (`*.so*`) y no un `rm -rf usr/lib`.
 #
 # Requisito en la máquina de destino: el stack del sistema (webkit2gtk-4.1,
 # gtk3, openssl), el mismo que ya piden .deb/.rpm.
@@ -70,8 +76,22 @@ if [[ -n "$SRC" && -f "$SRC" ]]; then
     cp -a "$SRC" "$STASH/"
 fi
 
-echo "Quitando las libs empaquetadas (usr/lib) para usar el WebView del sistema"
-rm -rf squashfs-root/usr/lib squashfs-root/usr/lib64
+# `usr/lib` no es sólo el stack: linuxdeploy también deja ahí los assets web de
+# la app (`usr/lib/<AppName>/assets`). Se relevan para poder verificar después
+# que sobrevivieron al borrado.
+ASSETS_DIRS=()
+while IFS= read -r d; do
+    [[ -n "$d" ]] && ASSETS_DIRS+=("$d")
+done < <(find squashfs-root/usr/lib squashfs-root/usr/bin -maxdepth 2 -type d -name assets 2>/dev/null)
+if [[ ${#ASSETS_DIRS[@]} -eq 0 ]]; then
+    echo "ERROR: no se encontraron assets de la app (usr/lib/<App>/assets);" >&2
+    echo "       ¿cambió el layout de dx bundle? Sin ellos la UI queda sin estilos." >&2
+    exit 1
+fi
+
+echo "Quitando las .so empaquetadas para usar el WebView del sistema"
+find squashfs-root/usr/lib squashfs-root/usr/lib64 -maxdepth 1 -name '*.so*' \
+    -delete 2>/dev/null || true
 
 if [[ -n "$(ls -A "$STASH" 2>/dev/null)" ]]; then
     mkdir -p squashfs-root/usr/lib
@@ -86,9 +106,10 @@ chmod +x "$APPIMAGETOOL"
 echo "Re-empaquetando en $APPIMAGE"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" squashfs-root "$APPIMAGE" >/dev/null
 
-# Verificación: sin stack GTK/WebKit empaquetado, pero con `libxdo` (sin ella el
-# AppImage no arranca en distros cuyo libxdo tiene otro soname) y con todas las
-# NEEDED resolubles por el loader.
+# Verificación (sobre una extracción limpia del re-empaquetado): sin stack
+# GTK/WebKit, con los assets de la app, con `libxdo` (sin ella no arranca en
+# distros cuyo libxdo tiene otro soname) y sin NEEDED sin resolver.
+rm -rf squashfs-root
 "$APPIMAGE" --appimage-extract >/dev/null
 if [[ -e squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0 || -e squashfs-root/usr/lib/libgtk-3.so.0 ]]; then
     echo "ERROR: el AppImage re-empaquetado sigue trayendo el stack GTK/WebKit" >&2
@@ -98,6 +119,12 @@ if [[ -z "$(find squashfs-root/usr/lib -name "$XDO" -print -quit 2>/dev/null)" ]
     echo "ERROR: el AppImage re-empaquetado no trae $XDO en usr/lib" >&2
     exit 1
 fi
+for d in "${ASSETS_DIRS[@]}"; do
+    if [[ ! -d "$d" ]]; then
+        echo "ERROR: el AppImage re-empaquetado perdió los assets de la app ($d)" >&2
+        exit 1
+    fi
+done
 FALTAN="$(ldd squashfs-root/usr/bin/featherai 2>/dev/null | sed -n 's/.*not found.*/&/p')"
 if [[ -n "$FALTAN" ]]; then
     echo "ERROR: al binario le faltan libs: $FALTAN" >&2
