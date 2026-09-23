@@ -36,6 +36,14 @@ jobs:
         # Runner 22.04 (no 24.04): el tooling de AppImage necesita FUSE2.
         run: dx bundle --platform desktop --package-types deb --package-types rpm --package-types appimage --release
 
+      - name: "AppImage: usar WebView del sistema (no empaquetar WebKitGTK)"
+        # `dx bundle` empaqueta el WebKitGTK/GTK del runner (Ubuntu) en el
+        # AppImage; esa lib trae hardcodeado su directorio de helper processes
+        # (/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1) y rompe en Arch/Fedora/…
+        # ("Unable to spawn .../WebKitNetworkProcess"). Este paso las quita para
+        # que el AppImage use el WebView del sistema, igual que .deb/.rpm.
+        run: ./scripts/fix-appimage-system-webview.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-bundles

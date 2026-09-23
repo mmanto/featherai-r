@@ -30,7 +30,7 @@ script = []
 [bundle]
 identifier = "com.featherai.app"
 publisher = "Martín Mantovani"
-version = "0.1.3"
+version = "0.1.4"
 category = "Productivity"
 short_description = "Gestión de proyectos local-first"
 long_description = "Gestor de proyectos y tareas de escritorio con persistencia local-first (GuardianDB sobre Iroh)."

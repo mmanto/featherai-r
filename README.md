@@ -180,6 +180,21 @@ sudo dnf install ./featherai-0.1.2-1.x86_64.rpm   # Fedora / RHEL
 APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.2_x86_64.AppImage   # sin FUSE2
 ```
 
+El AppImage usa el WebView del sistema, igual que `.deb`/`.rpm`: necesita
+`webkit2gtk-4.1`, `gtk3`, `libxdo` y `openssl` instalados en la máquina. Si
+`dx bundle` lo dejara tal cual, empaquetaría el WebKitGTK/GTK de la máquina que
+lo compila, y esa `libwebkit2gtk` trae hardcodeado el directorio de sus procesos
+helper (`/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1` en Ubuntu), que no existe en
+Arch/Fedora/… y hace que el AppImage no arranque
+(`ERROR **: Unable to spawn a new child process …/WebKitNetworkProcess`). Por
+eso, tras el bundle, `scripts/fix-appimage-system-webview.sh` quita esas libs
+empaquetadas y re-empaqueta el AppImage; CI lo corre solo
+(`.github/workflows/bundle.yml`). En un build local, correrlo a mano:
+
+```bash
+./scripts/fix-appimage-system-webview.sh
+```
+
 `dx` writes the `.deb`/`.rpm` itself (no `dpkg-deb`/`rpmbuild` needed); the
 AppImage step downloads `linuxdeploy`. `[bundle.deb].depends` declares the
 WebView libraries (`libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libxdo3`, `libssl3`,
