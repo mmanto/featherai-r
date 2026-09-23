@@ -10,7 +10,8 @@
 //!
 //! # Persistencia (nativo) vs demo (web)
 //! En desktop, [`ProjectProvider`] arranca con el snapshot persistido que
-//! `init_backend` (main.rs) tomó de GuardianDB y lo refresca al montar. Las
+//! `init_backend` (main.rs) tomó de GuardianDB y lo refresca al montar y cada
+//! 3 s mientras la vista está montada. Las
 //! acciones (`add_project`, [`update_project`], …) son `async`: mutan el
 //! estado local (optimista) y persisten vía `crate::services`, que devuelve
 //! la entidad canónica (id uuid v4 asignado por el servicio, `created_at`,
@@ -33,6 +34,11 @@ static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 pub fn next_id(prefix: &str) -> String {
     format!("{prefix}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
 }
+
+/// Intervalo del refresco automático del listado en nativo (mismo valor que
+/// la lista de pares en Ajustes).
+#[cfg(not(target_arch = "wasm32"))]
+const PROJECT_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Modo de vista de las tareas — equivalente de `ViewMode` de React.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -68,8 +74,10 @@ fn initial_projects() -> Vec<Project> {
 
 /// Proveedor del estado de proyectos — equivalente de `ProjectProvider`.
 ///
-/// En nativo refresca el listado desde GuardianDB al montar (los cambios
-/// quedan persistidos aunque la vista se desmonte al navegar).
+/// En nativo refresca el listado desde GuardianDB al montar y luego cada 3 s
+/// mientras la vista está montada, para que los cambios hechos por otro nodo
+/// (sync Iroh) o por un escritor externo aparezcan sin reiniciar la app. Los
+/// cambios quedan persistidos aunque la vista se desmonte al navegar.
 #[component]
 pub fn ProjectProvider(children: Element) -> Element {
     let initial = initial_projects();
@@ -84,14 +92,27 @@ pub fn ProjectProvider(children: Element) -> Element {
         let state = state.clone();
         spawn(async move {
             let mut state = state;
-            match crate::services::project::reload_all(crate::persistence::db()).await {
-                Ok(projects) => {
-                    let mut s = state.write();
-                    if s.projects != projects {
-                        s.projects = projects;
+            loop {
+                match crate::services::project::reload_all(crate::persistence::db()).await {
+                    Ok(projects) => {
+                        let mut s = state.write();
+                        if s.projects != projects {
+                            // Si el proyecto seleccionado ya no existe (lo borró
+                            // otro nodo), limpiar la selección: ProjectManagement
+                            // no renderiza nada con `selected_id` colgado.
+                            let seleccionado_ausente = s
+                                .selected_project_id
+                                .as_deref()
+                                .is_some_and(|sel| !projects.iter().any(|p| p.id == sel));
+                            if seleccionado_ausente {
+                                s.selected_project_id = None;
+                            }
+                            s.projects = projects;
+                        }
                     }
+                    Err(e) => eprintln!("[featherai] refrescando proyectos: {e}"),
                 }
-                Err(e) => eprintln!("[featherai] refrescando proyectos: {e}"),
+                tokio::time::sleep(PROJECT_REFRESH_INTERVAL).await;
             }
         });
     });
