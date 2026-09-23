@@ -12,14 +12,20 @@
 # WEBKIT_EXEC_PATH no sirve: WebKitGTK solo la respeta en builds con
 # ENABLE(DEVELOPER_MODE), no en los paquetes de las distros.
 #
-# Fix: borrar las libs empaquetadas (usr/lib) y re-empaquetar con appimagetool.
-# El binario queda con RUNPATH `$ORIGIN/../lib` apuntando a un directorio que ya
-# no existe, así que el loader cae a las rutas del sistema y usa el WebKitGTK
-# instalado — igual que el .deb/.rpm, que declaran libwebkit2gtk-4.1-0,
-# libgtk-3-0, libxdo3 y libssl3 en `depends`.
+# Fix: vaciar las libs empaquetadas (usr/lib) —salvo `libxdo`— y re-empaquetar
+# con appimagetool. El binario queda con RUNPATH `$ORIGIN/../lib` apuntando a un
+# directorio que ya no trae el stack, así que el loader cae a las rutas del
+# sistema y usa el WebKitGTK instalado — igual que el .deb/.rpm, que declaran
+# libwebkit2gtk-4.1-0, libgtk-3-0, libxdo3 y libssl3 en `depends`.
+#
+# Por qué se conserva `libxdo` (única excepción): no es parte del stack
+# GTK/WebKit y el sistema **no** la garantiza por soname. El runner de build
+# (Ubuntu) linkea `libxdo.so.3`, mientras que Arch ya sólo provee
+# `libxdo.so.4` (xdotool >= 4); sin la copia empaquetada el AppImage muere al
+# arrancar con "libxdo.so.3: cannot open shared object file" (exit 127).
 #
 # Requisito en la máquina de destino: el stack del sistema (webkit2gtk-4.1,
-# gtk3, libxdo, openssl), el mismo que ya piden .deb/.rpm.
+# gtk3, openssl), el mismo que ya piden .deb/.rpm.
 #
 # Uso:
 #   ./scripts/fix-appimage-system-webview.sh [path/al/AppImage]
@@ -45,8 +51,32 @@ cd "$WORK"
 echo "Extrayendo $APPIMAGE"
 "$APPIMAGE" --appimage-extract >/dev/null
 
+# `libxdo` es la única lib de usr/lib que no pertenece al stack GTK/WebKit y que
+# el destino tampoco garantiza por soname (ver cabecera). Se toma el soname que
+# pide el binario y se rescata antes de vaciar usr/lib.
+XDO="$(readelf -d squashfs-root/usr/bin/featherai 2>/dev/null \
+    | sed -n 's/.*(NEEDED).*\[\(libxdo\.so\.[0-9]\+\)\].*/\1/p' | head -1)"
+XDO="${XDO:-libxdo.so.3}"
+
+echo "Rescatando $XDO de usr/lib"
+STASH="$WORK/stash"
+mkdir -p "$STASH"
+SRC="$(find squashfs-root/usr/lib squashfs-root/usr/lib64 -name "$XDO" -print -quit 2>/dev/null || true)"
+if [[ -z "$SRC" ]]; then
+    # linuxdeploy no la empaquetó: se toma del sistema de build (mismo soname).
+    SRC="$(ldconfig -p 2>/dev/null | sed -n "s#.* => \(.*/$XDO\)\$#\1#p" | head -1)"
+fi
+if [[ -n "$SRC" && -f "$SRC" ]]; then
+    cp -a "$SRC" "$STASH/"
+fi
+
 echo "Quitando las libs empaquetadas (usr/lib) para usar el WebView del sistema"
 rm -rf squashfs-root/usr/lib squashfs-root/usr/lib64
+
+if [[ -n "$(ls -A "$STASH" 2>/dev/null)" ]]; then
+    mkdir -p squashfs-root/usr/lib
+    cp -a "$STASH"/. squashfs-root/usr/lib/
+fi
 
 APPIMAGETOOL="$WORK/appimagetool"
 curl -fsSL -o "$APPIMAGETOOL" \
@@ -56,10 +86,21 @@ chmod +x "$APPIMAGETOOL"
 echo "Re-empaquetando en $APPIMAGE"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" squashfs-root "$APPIMAGE" >/dev/null
 
-# Verificación barata: el resultado no debe traer el stack GTK/WebKit empaquetado.
+# Verificación: sin stack GTK/WebKit empaquetado, pero con `libxdo` (sin ella el
+# AppImage no arranca en distros cuyo libxdo tiene otro soname) y con todas las
+# NEEDED resolubles por el loader.
 "$APPIMAGE" --appimage-extract >/dev/null
-if [[ -e squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0 ]] || [[ -e squashfs-root/usr/lib ]]; then
-    echo "ERROR: el AppImage re-empaquetado sigue trayendo usr/lib" >&2
+if [[ -e squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0 || -e squashfs-root/usr/lib/libgtk-3.so.0 ]]; then
+    echo "ERROR: el AppImage re-empaquetado sigue trayendo el stack GTK/WebKit" >&2
+    exit 1
+fi
+if [[ -z "$(find squashfs-root/usr/lib -name "$XDO" -print -quit 2>/dev/null)" ]]; then
+    echo "ERROR: el AppImage re-empaquetado no trae $XDO en usr/lib" >&2
+    exit 1
+fi
+FALTAN="$(ldd squashfs-root/usr/bin/featherai 2>/dev/null | sed -n 's/.*not found.*/&/p')"
+if [[ -n "$FALTAN" ]]; then
+    echo "ERROR: al binario le faltan libs: $FALTAN" >&2
     exit 1
 fi
 rm -rf squashfs-root

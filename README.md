@@ -181,14 +181,19 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./featherai_0.1.2_x86_64.AppImage   # sin FUSE2
 ```
 
 El AppImage usa el WebView del sistema, igual que `.deb`/`.rpm`: necesita
-`webkit2gtk-4.1`, `gtk3`, `libxdo` y `openssl` instalados en la máquina. Si
+`webkit2gtk-4.1`, `gtk3` y `openssl` instalados en la máquina. `libxdo` es la
+excepción: viaja dentro del AppImage, porque su *soname* cambia entre distros
+(el runner de CI linkea `libxdo.so.3`; Arch ya sólo provee `libxdo.so.4`) y sin
+la copia empaquetada el arranque muere con
+`libxdo.so.3: cannot open shared object file`. Si
 `dx bundle` lo dejara tal cual, empaquetaría el WebKitGTK/GTK de la máquina que
 lo compila, y esa `libwebkit2gtk` trae hardcodeado el directorio de sus procesos
 helper (`/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1` en Ubuntu), que no existe en
 Arch/Fedora/… y hace que el AppImage no arranque
 (`ERROR **: Unable to spawn a new child process …/WebKitNetworkProcess`). Por
-eso, tras el bundle, `scripts/fix-appimage-system-webview.sh` quita esas libs
-empaquetadas y re-empaqueta el AppImage; CI lo corre solo
+eso, tras el bundle, `scripts/fix-appimage-system-webview.sh` vacía esas libs
+empaquetadas (salvo `libxdo`, ver arriba) y re-empaqueta el AppImage; CI lo
+corre solo
 (`.github/workflows/bundle.yml`). En un build local, correrlo a mano:
 
 ```bash
