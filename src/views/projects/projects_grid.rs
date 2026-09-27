@@ -1,5 +1,5 @@
+use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::toast::{show_toast, use_toast, ToastVariant};
-use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{
     delete_project, fmt_date, update_project, use_projects, Priority, Project, ProjectState,
     ProjectStatus,
@@ -75,6 +75,9 @@ fn ProjectRow(
     let pstart_fmt = fmt_date(&pstart);
     let pend_fmt = fmt_date(&pend);
     let pcolor = project.color.clone();
+    // Negocio del proyecto, para distinguir filas cuando el listado mezcla
+    // varios negocios (admin/operativo pueden pertenecer a más de uno).
+    let pbusiness = project.business.clone();
     let pstatus_label = project.status.label();
     let pstatus_badge = project.status.badge();
     let ppriority_label = project.priority.label();
@@ -160,16 +163,25 @@ fn ProjectRow(
                                 onclick: move |e| e.stop_propagation(),
                             }
                         } else {
-                            div {
-                                class: "font-medium",
-                                ondoubleclick: {
-                                    let pname = pname.clone();
-                                    move |_| {
-                                        editing.set(true);
-                                        editing_value.set(pname.as_str().to_string());
+                            div { class: "flex items-center gap-2",
+                                div {
+                                    class: "font-medium",
+                                    ondoubleclick: {
+                                        let pname = pname.clone();
+                                        move |_| {
+                                            editing.set(true);
+                                            editing_value.set(pname.as_str().to_string());
+                                        }
+                                    },
+                                    "{pname}"
+                                }
+                                if let Some(business) = &pbusiness {
+                                    span {
+                                        class: "inline-flex items-center rounded-full border border-[var(--border-color)] bg-[var(--bg-secondary)] px-2 py-0.5 text-xs text-[var(--text-secondary)]",
+                                        i { class: "bi bi-building me-1" }
+                                        "{business}"
                                     }
-                                },
-                                "{pname}"
+                                }
                             }
                             if let Some(desc) = &pdesc {
                                 small { class: "text-[var(--text-secondary)] block truncate", style: "max-width:300px", "{desc}" }

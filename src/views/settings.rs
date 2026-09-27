@@ -217,12 +217,10 @@ pub fn Settings() -> Element {
     let auth = use_auth();
     let user = auth.read().user.clone();
 
-    let role_label = match user.as_ref().map(|u| u.role.as_str()) {
-        Some("super_admin") => "Administración general",
-        Some("admin") => "Administrador",
-        Some("operativo") => "Operativo",
-        _ => "",
-    };
+    let role_label = user
+        .as_ref()
+        .map(|u| crate::models::role_label(u.role.as_str()))
+        .unwrap_or("");
     let username = user
         .as_ref()
         .map(|u| u.username.clone())

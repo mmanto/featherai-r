@@ -1,4 +1,4 @@
-use crate::views::projects::confirm_dialog::ConfirmDialog;
+use crate::components::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{Task, TaskStatus, ViewMode};
 use dioxus::prelude::*;
 

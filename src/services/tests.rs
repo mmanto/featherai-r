@@ -5,7 +5,7 @@
 //! cargo test --bin featherai services -- --test-threads=1
 //! ```
 
-use crate::models::{Priority, Project, ProjectStatus, StoredUser, Task, TaskStatus};
+use crate::models::{Priority, Project, ProjectStatus, StoredUser, Task, TaskStatus, User};
 use crate::net::Join;
 use crate::persistence::{open_with_config, AppError, Db};
 use guardian_db::p2p::network::config::ClientConfig;
@@ -47,6 +47,19 @@ fn sample_project(name: &str) -> Project {
         color: "#6c757d".to_string(),
         created_at: None,
         tasks: Vec::new(),
+    }
+}
+
+/// Usuario de prueba para el ABM: sin email/avatar y con los negocios dados.
+fn sample_user(username: &str, role: &str, businesses: &[&str]) -> User {
+    User {
+        username: username.to_string(),
+        email: None,
+        nombre: Some("Test".to_string()),
+        apellido: None,
+        avatar_url: None,
+        role: role.to_string(),
+        businesses: businesses.iter().map(|b| (*b).to_string()).collect(),
     }
 }
 
@@ -269,6 +282,15 @@ async fn services_auth_admin_seed_and_login() {
     assert_eq!(user.username, "admin");
     assert_eq!(user.role, "super_admin");
     assert_eq!(user.nombre.as_deref(), Some("Admin"));
+    assert_eq!(
+        user.businesses,
+        vec![
+            "AgileTeam Corp".to_string(),
+            "NovaSoft".to_string(),
+            "TechCorp".to_string()
+        ],
+        "el admin sembrado arranca con los negocios demo"
+    );
 
     // El doc persistido guarda el hash PHC argon2 (nunca la contraseña).
     let bytes = db.users.get("admin").await.unwrap().expect("doc admin");
@@ -285,4 +307,147 @@ async fn services_auth_admin_seed_and_login() {
     crate::services::auth::ensure_admin(&db).await.expect("ensure 2");
     assert_eq!(db.users.all().len(), 1, "un solo admin persistido");
     assert!(crate::services::auth::login(&db, "admin", "admin").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn services_users_abm_crud() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_db(dir.path()).await;
+
+    // Alta: username normalizado (trim + lowercase) y negocios con trim + dedup.
+    let created = crate::services::auth::create_user(
+        &db,
+        &sample_user("Ana.Ruiz", "operativo", &["NovaSoft", " NovaSoft ", "Acme"]),
+        "secreto",
+    )
+    .await
+    .expect("alta de usuario");
+    assert_eq!(created.username, "ana.ruiz", "username normalizado");
+    assert_eq!(
+        created.businesses,
+        vec!["NovaSoft".to_string(), "Acme".to_string()],
+        "negocios normalizados y deduplicados"
+    );
+
+    // El listado incluye al admin sembrado y ordena por username.
+    let users = crate::services::auth::list_users(&db).await.expect("listado");
+    assert_eq!(
+        users.iter().map(|u| u.username.as_str()).collect::<Vec<_>>(),
+        vec!["admin", "ana.ruiz"]
+    );
+
+    assert!(crate::services::auth::login(&db, "ana.ruiz", "secreto").await.unwrap().is_some());
+
+    // Modificación: nombre + negocios y rotación de contraseña (username intacto).
+    let mut edit = created.clone();
+    edit.nombre = Some("Ana".to_string());
+    edit.businesses = vec!["Acme".to_string()];
+    let updated = crate::services::auth::update_user(&db, "ana.ruiz", &edit, Some("nueva-clave"))
+        .await
+        .expect("modificación");
+    assert_eq!(updated.username, "ana.ruiz");
+    assert_eq!(updated.nombre.as_deref(), Some("Ana"));
+    assert_eq!(updated.businesses, vec!["Acme".to_string()]);
+    assert!(crate::services::auth::login(&db, "ana.ruiz", "nueva-clave").await.unwrap().is_some());
+    assert!(
+        crate::services::auth::login(&db, "ana.ruiz", "secreto").await.unwrap().is_none(),
+        "la contraseña vieja ya no sirve"
+    );
+
+    // Baja física del doc.
+    crate::services::auth::delete_user(&db, "ana.ruiz").await.expect("baja");
+    assert!(crate::services::auth::login(&db, "ana.ruiz", "nueva-clave").await.unwrap().is_none());
+    assert_eq!(
+        crate::services::auth::list_users(&db).await.unwrap().len(),
+        1,
+        "queda sólo el admin"
+    );
+}
+
+#[tokio::test]
+async fn services_users_validaciones_y_guardas() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_db(dir.path()).await;
+
+    // Entradas inválidas: sin negocio, username corto, rol desconocido y
+    // contraseña vacía.
+    for (user, password) in [
+        (sample_user("pepe", "operativo", &[]), "secreto"),
+        (sample_user("ab", "operativo", &["Acme"]), "secreto"),
+        (sample_user("pepe", "root", &["Acme"]), "secreto"),
+        (sample_user("pepe", "operativo", &["Acme"]), ""),
+    ] {
+        let result = crate::services::auth::create_user(&db, &user, password).await;
+        assert!(
+            matches!(result, Err(AppError::Invalid(_))),
+            "entrada inválida rechazada: {user:?}"
+        );
+    }
+
+    // Alta válida y duplicado case-insensitive.
+    crate::services::auth::create_user(&db, &sample_user("pepe", "operativo", &["Acme"]), "secreto")
+        .await
+        .expect("alta válida");
+    let duplicado =
+        crate::services::auth::create_user(&db, &sample_user("PEPE", "operativo", &["Acme"]), "secreto")
+            .await;
+    assert!(matches!(duplicado, Err(AppError::Invalid(_))), "usuario duplicado rechazado");
+
+    // Guardas del último super_admin: no se borra ni se demueve.
+    assert!(matches!(
+        crate::services::auth::delete_user(&db, "admin").await,
+        Err(AppError::Invalid(_))
+    ));
+    let demote = crate::services::auth::update_user(
+        &db,
+        "admin",
+        &sample_user("admin", "admin", &["Acme"]),
+        None,
+    )
+    .await;
+    assert!(matches!(demote, Err(AppError::Invalid(_))));
+
+    // Con un segundo super_admin, la democión/baja del primero pasa.
+    crate::services::auth::create_user(&db, &sample_user("root2", "super_admin", &["Acme"]), "secreto")
+        .await
+        .expect("segundo super_admin");
+    crate::services::auth::delete_user(&db, "admin").await.expect("baja con otro super_admin");
+
+    // Baja de un usuario inexistente → NotFound.
+    assert!(matches!(
+        crate::services::auth::delete_user(&db, "nadie").await,
+        Err(AppError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn services_users_omite_docs_ajenos_al_formato() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_db(dir.path()).await;
+
+    // Doc escrito por fuera de la app (otro formato, sin `password_hash`): no
+    // rompe el listado —ni el arranque, que lo usa— ni las guardas.
+    db.users
+        .put("gabriel", br#"{"username":"gabriel","role":"admin"}"#.to_vec())
+        .await
+        .expect("doc ajeno");
+
+    let users = crate::services::auth::list_users(&db).await.expect("listado");
+    assert_eq!(
+        users.iter().map(|u| u.username.as_str()).collect::<Vec<_>>(),
+        vec!["admin"],
+        "el doc ajeno se omite del listado"
+    );
+
+    // El doc ajeno no cuenta como super_admin (sigue siendo el único el admin).
+    assert!(matches!(
+        crate::services::auth::delete_user(&db, "admin").await,
+        Err(AppError::Invalid(_))
+    ));
+
+    // El alta sigue funcionando con el doc ajeno presente.
+    crate::services::auth::create_user(&db, &sample_user("pepe", "operativo", &["Acme"]), "secreto")
+        .await
+        .expect("alta con doc ajeno presente");
+    assert_eq!(db.users.all().len(), 3, "admin + gabriel + pepe");
 }

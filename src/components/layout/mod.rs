@@ -22,4 +22,4 @@ mod user_menu;
 pub use action_bar::ActionBar;
 pub use app_layout::AppLayout;
 pub use mobile_nav::MobileNav;
-pub use state::{use_auth, AuthProvider, SidebarProvider};
+pub use state::{AuthProvider, SidebarProvider, use_auth, use_business_scope};

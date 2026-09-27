@@ -1,38 +1,14 @@
-use crate::components::layout::AppLayout;
-use crate::components::protected_route::{ProtectedRoute, SUPER_ADMIN_ROLES};
+use crate::components::layout::{AppLayout, use_business_scope};
+use crate::components::protected_route::{PROJECT_ROLES, ProtectedRoute};
 use crate::components::toast::{show_toast, use_toast, ToastVariant};
+use crate::models::{NEW_BUSINESS, business_options};
 use crate::views::projects::project_detail::ProjectDetail;
 use crate::views::projects::projects_grid::ProjectsGrid;
 use crate::views::projects::state::{
-    add_project, add_task, delete_task, next_id, select_project, update_project, update_task,
-    use_projects, Priority, Project, ProjectProvider, ProjectStatus, Task, TaskStatus,
+    add_project, add_task, delete_task, next_id, project_visible, select_project, update_project,
+    update_task, use_projects, Priority, Project, ProjectProvider, ProjectStatus, Task, TaskStatus,
 };
 use dioxus::prelude::*;
-
-/// Negocios demo que se ofrecen al crear un proyecto (en React venían de
-/// `businessService.getAll()`). La lista se completa con los negocios que ya
-/// usan los proyectos existentes: un negocio se crea eligiendo *Nuevo
-/// negocio…* en el formulario y guardando el primer proyecto que lo usa.
-const BUSINESSES: [&str; 3] = ["AgileTeam Corp", "NovaSoft", "TechCorp"];
-
-/// Valor centinela del selector de negocio: muestra el campo para escribir
-/// un negocio nuevo. No puede chocar con un nombre real (`business_options`
-/// lo filtra y la creación lo rechaza).
-const NEW_BUSINESS: &str = "__new__";
-
-/// Opciones del selector: los demo + los negocios de los proyectos existentes
-/// (deduplicados). Un proyecto sin negocio no contribuye nombres.
-fn business_options(projects: &[Project]) -> Vec<String> {
-    let mut options: Vec<String> = BUSINESSES.iter().map(|b| (*b).to_string()).collect();
-    for project in projects {
-        if let Some(b) = &project.business {
-            if !b.is_empty() && b != NEW_BUSINESS && !options.contains(b) {
-                options.push(b.clone());
-            }
-        }
-    }
-    options
-}
 
 /// Página `/admin/projects` — port de `ProjectManagement.tsx`.
 ///
@@ -42,7 +18,7 @@ fn business_options(projects: &[Project]) -> Vec<String> {
 pub fn Projects() -> Element {
     rsx! {
         ProtectedRoute {
-            roles: Some(SUPER_ADMIN_ROLES),
+            roles: Some(PROJECT_ROLES),
             AppLayout {
                 ProjectProvider {
                     ProjectManagement {}
@@ -56,15 +32,26 @@ pub fn Projects() -> Element {
 fn ProjectManagement() -> Element {
     let state = use_projects();
     let toasts = use_toast();
+    let scope = use_business_scope();
     let mut show_new_project = use_signal(|| false);
     let mut show_new_task = use_signal(|| false);
 
-    let selected_id = state.read().selected_project_id.clone();
-    let selected = state
+    // Listado visible del rol: administración general ve todo; admin/operativo,
+    // sólo los proyectos de los negocios a los que pertenecen.
+    let visible_scope = scope();
+    let projects: Vec<Project> = state
         .read()
         .projects
         .iter()
-        .find(|p| Some(p.id.as_str()) == selected_id.as_deref())
+        .filter(|p| project_visible(p, visible_scope.as_deref()))
+        .cloned()
+        .collect();
+
+    let selected = state
+        .read()
+        .selected_project_id
+        .as_deref()
+        .and_then(|id| projects.iter().find(|p| p.id == id))
         .cloned();
 
     // El id del proyecto seleccionado para los handlers del detalle (el
@@ -131,21 +118,19 @@ fn ProjectManagement() -> Element {
     };
 
     rsx! {
-        if selected_id.is_some() {
-            if let Some(project) = selected {
-                ProjectDetail {
-                    project: project.clone(),
-                    on_back: move |_| select_project(state, None),
-                    on_back_to_projects: move |_| select_project(state, None),
-                    on_add_task: move |_| *show_new_task.write() = true,
-                    on_update_task: detail_on_update_task.clone(),
-                    on_delete_task: detail_on_delete_task.clone(),
-                    on_update_project: detail_on_update_project.clone(),
-                }
+        if let Some(project) = selected {
+            ProjectDetail {
+                project: project.clone(),
+                on_back: move |_| select_project(state, None),
+                on_back_to_projects: move |_| select_project(state, None),
+                on_add_task: move |_| *show_new_task.write() = true,
+                on_update_task: detail_on_update_task.clone(),
+                on_delete_task: detail_on_delete_task.clone(),
+                on_update_project: detail_on_update_project.clone(),
             }
         } else {
             ProjectsGrid {
-                projects: state.read().projects.clone(),
+                projects: projects.clone(),
                 on_project_select: move |id| select_project(state, Some(id)),
                 on_new_project: move |_| *show_new_project.write() = true,
             }
@@ -197,11 +182,33 @@ fn ProjectManagement() -> Element {
 #[component]
 fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>) -> Element {
     let state = use_projects();
-    let options = business_options(&state.read().projects);
+    // Alcance del rol: administración general elige libremente (demo + usados +
+    // "Nuevo negocio…"); admin/operativo sólo dentro de sus negocios — si no,
+    // el proyecto no aparecería en su propio listado.
+    let scope = use_business_scope()();
+    let es_super_admin = scope.is_none();
+    let options = if es_super_admin {
+        business_options(
+            state
+                .read()
+                .projects
+                .iter()
+                .filter_map(|p| p.business.clone()),
+        )
+    } else {
+        scope.clone().unwrap_or_default()
+    };
     let mut name = use_signal(String::new);
     let mut description = use_signal(String::new);
-    // "" = sin negocio; NEW_BUSINESS = el usuario está escribiendo uno nuevo.
-    let mut business = use_signal(String::new);
+    // "" = sin negocio (sólo administración general puede dejarlo vacío);
+    // NEW_BUSINESS = el usuario está escribiendo uno nuevo.
+    let mut business = use_signal(|| {
+        if es_super_admin {
+            String::new()
+        } else {
+            options.first().cloned().unwrap_or_default()
+        }
+    });
     let mut new_business = use_signal(String::new);
     let mut start_date = use_signal(String::new);
     let mut end_date = use_signal(String::new);
@@ -230,6 +237,11 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                 Some(selection)
             }
         };
+        // admin/operativo crean siempre dentro de un negocio propio (el selector
+        // no ofrece otra cosa); sin negocio el proyecto sería invisible para él.
+        if !es_super_admin && business_name.is_none() {
+            return;
+        }
         on_submit.call(Project {
             id: next_id("p"),
             name,
@@ -286,13 +298,17 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                                 class: "block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:outline-none",
                                 value: business(),
                                 onchange: move |e| business.set(e.value()),
-                                option { value: "", "— Sin negocio —" }
+                                if es_super_admin {
+                                    option { value: "", "— Sin negocio —" }
+                                }
                                 for option in &options {
                                     option { key: "{option}", value: "{option}", "{option}" }
                                 }
-                                option { value: NEW_BUSINESS, "Nuevo negocio…" }
+                                if es_super_admin {
+                                    option { value: NEW_BUSINESS, "Nuevo negocio…" }
+                                }
                             }
-                            if business() == NEW_BUSINESS {
+                            if es_super_admin && business() == NEW_BUSINESS {
                                 input {
                                     class: "mt-2 block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:shadow-[0_0_0_3px_rgba(0,163,240,0.12)] focus:outline-none",
                                     value: new_business(),

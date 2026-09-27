@@ -2,6 +2,10 @@
 //! `StoredUser`, la forma persistida en el store `users` de GuardianDB con
 //! el hash PHC argon2 de la contraseña. `StoredUser` es solo nativo (lo
 //! usan los servicios sobre GuardianDB).
+//!
+//! Un usuario pertenece a uno o más negocios (`businesses`): son nombres
+//! compartidos por convención con `Project.business` (ver
+//! [`crate::models::business`]).
 
 // StoredUser (el único tipo que serializa) vive solo en el camino nativo.
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,9 +19,10 @@ pub struct User {
     pub nombre: Option<String>,
     pub apellido: Option<String>,
     pub avatar_url: Option<String>,
-    /// Rol (super_admin/admin/operativo).
-    #[allow(dead_code)]
+    /// Rol (`super_admin`/`admin`/`operativo`, ver [`ROLES`]).
     pub role: String,
+    /// Negocios a los que pertenece (nombres; al menos uno).
+    pub businesses: Vec<String>,
 }
 
 impl User {
@@ -51,6 +56,10 @@ pub struct StoredUser {
     pub apellido: Option<String>,
     pub email: Option<String>,
     pub avatar_url: Option<String>,
+    /// Negocios a los que pertenece (nombres). `#[serde(default)]`: los docs
+    /// viejos sin el campo (o sin negocios) deserializan a lista vacía.
+    #[serde(default)]
+    pub businesses: Vec<String>,
     pub password_hash: String,
 }
 
@@ -65,6 +74,20 @@ impl StoredUser {
             apellido: self.apellido,
             avatar_url: self.avatar_url,
             role: self.role,
+            businesses: self.businesses,
         }
+    }
+}
+
+/// Roles que puede asignar el ABM (mismos valores que persiste el seed).
+pub const ROLES: [&str; 3] = ["super_admin", "admin", "operativo"];
+
+/// Etiqueta del rol para la UI — misma tabla que usaba `Settings` inline.
+pub fn role_label(role: &str) -> &'static str {
+    match role {
+        "super_admin" => "Administración general",
+        "admin" => "Administrador",
+        "operativo" => "Operativo",
+        _ => "",
     }
 }

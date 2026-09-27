@@ -11,8 +11,10 @@ mod admin;
 mod login;
 mod projects;
 mod settings;
+mod users;
 
 pub use admin::AdminPanel;
 pub use login::Login;
 pub use projects::Projects;
 pub use settings::Settings;
+pub use users::Users;

@@ -72,6 +72,20 @@ fn initial_projects() -> Vec<Project> {
     crate::demo::demo_projects()
 }
 
+/// `true` si el proyecto entra en la vista de un usuario con ese alcance de
+/// negocios: `None` = sin alcance (rol de administración general), ve todo;
+/// `Some(negocios)` = sólo los proyectos cuyo negocio está entre los suyos (un
+/// proyecto sin negocio queda fuera).
+pub fn project_visible(project: &Project, scope: Option<&[String]>) -> bool {
+    match scope {
+        None => true,
+        Some(allowed) => project
+            .business
+            .as_deref()
+            .is_some_and(|business| allowed.iter().any(|b| b == business)),
+    }
+}
+
 /// Proveedor del estado de proyectos — equivalente de `ProjectProvider`.
 ///
 /// En nativo refresca el listado desde GuardianDB al montar y luego cada 3 s
@@ -334,4 +348,36 @@ pub fn fmt_date(iso: &str) -> String {
 pub fn weekday_short(iso: &str) -> &'static str {
     let day = epoch_days(iso).unwrap_or(0);
     WEEKDAYS_SHORT[(day + 4).rem_euclid(7) as usize]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_visible;
+
+    /// Alcance por negocio del listado de proyectos (p1 = AgileTeam Corp,
+    /// p2 = NovaSoft, p3 = TechCorp).
+    #[test]
+    fn alcance_por_negocio() {
+        let mut projects = crate::demo::demo_projects();
+        projects[0].business = None;
+
+        // Sin alcance (administración general): ve todo, incluso sin negocio.
+        assert!(projects.iter().all(|p| project_visible(p, None)));
+
+        // Con un negocio: sólo los suyos; sin negocio queda fuera.
+        let nova = vec!["NovaSoft".to_string()];
+        assert!(!project_visible(&projects[0], Some(&nova)));
+        assert!(project_visible(&projects[1], Some(&nova)));
+        assert!(!project_visible(&projects[2], Some(&nova)));
+
+        // Varios negocios: unión.
+        let dos = vec!["NovaSoft".to_string(), "TechCorp".to_string()];
+        assert!(!project_visible(&projects[0], Some(&dos)));
+        assert!(project_visible(&projects[1], Some(&dos)));
+        assert!(project_visible(&projects[2], Some(&dos)));
+
+        // Sin negocios asignados: no ve ninguno.
+        let ninguno: Vec<String> = Vec::new();
+        assert!(!projects.iter().any(|p| project_visible(p, Some(&ninguno))));
+    }
 }

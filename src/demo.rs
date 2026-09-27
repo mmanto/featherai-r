@@ -6,6 +6,10 @@
 //! modelo.
 
 use crate::models::{Priority, Project, ProjectStatus, Task, TaskStatus};
+// Los usuarios demo sólo los usa el camino web/wasm (en nativo el store se
+// siembra con `services::auth::ensure_admin`).
+#[cfg(target_arch = "wasm32")]
+use crate::models::{DEMO_BUSINESSES, User};
 
 /// Proyectos demo (ids `p1..p3`, tareas `t1..t10`) — equivalente de los
 /// seeds originales del `ProjectContext` de React.
@@ -179,4 +183,31 @@ pub fn demo_projects() -> Vec<Project> {
     };
 
     vec![p1, p2, p3]
+}
+
+/// Usuarios demo — sólo los usa web/wasm (sin persistencia): en nativo el
+/// store se siembra con [`crate::services::auth::ensure_admin`]. El admin
+/// arranca con los tres negocios demo, como la siembra nativa.
+#[cfg(target_arch = "wasm32")]
+pub fn demo_users() -> Vec<User> {
+    vec![
+        User {
+            username: "admin".into(),
+            email: None,
+            nombre: Some("Admin".into()),
+            apellido: None,
+            avatar_url: None,
+            role: "super_admin".into(),
+            businesses: DEMO_BUSINESSES.iter().map(|b| (*b).to_string()).collect(),
+        },
+        User {
+            username: "ana.ruiz".into(),
+            email: Some("ana.ruiz@novasoft.example".into()),
+            nombre: Some("Ana".into()),
+            apellido: Some("Ruiz".into()),
+            avatar_url: None,
+            role: "operativo".into(),
+            businesses: vec!["NovaSoft".into()],
+        },
+    ]
 }

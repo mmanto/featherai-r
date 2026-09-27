@@ -20,6 +20,18 @@
 //! próximo arranque (el proceso ya resolvió su namespace): por eso Ajustes
 //! marca esos pares como [`Peer::late`].
 //!
+//! # Un par se registra sólo si la conexión se estableció
+//! `IrohClient::connect_gossip` llama `note_known_peer` **antes** de dialear,
+//! así que un par apagado queda "conocido" igual. Eso le cuesta minutos a la
+//! apertura: `resolve_shared_ticket` le pide el ticket a cada par conocido y
+//! cada pedido espera el timeout de conexión de iroh (30 s, con hasta 11
+//! intentos por store cuando hay un par de id menor: ~5,5 min por store) sin
+//! ganar nada — un par que no responde no puede entregar el ticket. Por eso
+//! [`dial`] primero prueba la conexión (sin registrar) y sólo entonces llama a
+//! `connect_gossip`. Un par que no responde al arrancar no demora la ventana:
+//! los stores reabren su namespace local (el que ya tenían) y el watcher mDNS
+//! sigue intentando en segundo plano.
+//!
 //! # Descubrimiento en la red interna
 //! La instancia mDNS que arma guardian-db adentro usa el servicio `irohv1` y
 //! no expone su stream, así que acá se crea una propia con servicio
@@ -62,10 +74,10 @@ pub const PEERS_FILE: &str = "peers.txt";
 /// repiten cada pocos segundos).
 pub const DEFAULT_LAN_WAIT: Duration = Duration::from_millis(2500);
 
-/// Tope del dial al arrancar: la conexión no hace falta para el intercambio
-/// de tickets (basta con que el par quede registrado como conocido, lo que
-/// `connect_gossip` hace *antes* de dialear), así que un par apagado no puede
-/// demorar la apertura de la base.
+/// Tope del dial al arrancar. Un par apagado cuesta este tope (una vez por
+/// par configurado): la conexión hace falta para el registro (`note_known_peer`
+/// es lo que habilita el intercambio de tickets, ver [`dial`]), así que el
+/// arranque no puede esperar más que esto por un par que no responde.
 const START_DIAL: Duration = Duration::from_secs(2);
 
 /// Tope del dial pedido desde Ajustes ("Conectar").
@@ -147,6 +159,9 @@ struct State {
     lan: BTreeSet<EndpointId>,
     /// Conectados por nosotros en esta corrida.
     dialed: BTreeSet<EndpointId>,
+    /// Pares a los que ya se les intentó conectar (el pase final del arranque
+    /// no re-dialea lo que el watcher mDNS ya intentó).
+    attempted: BTreeSet<EndpointId>,
     /// Vistos/agregados después de abrir los stores.
     late: BTreeSet<EndpointId>,
     /// Ya se abrieron los stores (todo lo que llegue después es "late").
@@ -164,11 +179,15 @@ impl State {
         }
     }
 
+    /// Ids que muestra Ajustes: los configurados, los vistos por mDNS y los
+    /// que se intentaron conectar en esta corrida (un par conectado desde
+    /// Ajustes sin estar guardado igual aparece en la lista).
     fn ids(&self) -> BTreeSet<EndpointId> {
         self.env_peers
             .iter()
             .chain(&self.saved)
             .chain(&self.lan)
+            .chain(&self.attempted)
             .copied()
             .collect()
     }
@@ -202,8 +221,8 @@ impl Peers {
         }
         let inner = Arc::new(Mutex::new(state));
 
-        // Pares explícitos: el dial puede tardar (par apagado), pero lo que
-        // importa —`note_known_peer`— ya pasó cuando vuelve.
+        // Pares explícitos: un par que no responde cuesta `START_DIAL` y queda
+        // sin registrar (ver [`dial`]), así que no demora la apertura.
         if join.configured {
             let ids: Vec<EndpointId> = {
                 let st = lock(&inner);
@@ -228,7 +247,7 @@ impl Peers {
             // pueden no haber sido dialeados por el watcher todavía.
             let pending: Vec<EndpointId> = {
                 let st = lock(&inner);
-                st.lan.difference(&st.dialed).copied().collect()
+                st.lan.difference(&st.attempted).copied().collect()
             };
             for id in pending {
                 let _ = dial(&inner, &client.clone(), id, START_DIAL).await;
@@ -288,6 +307,7 @@ impl Peers {
         let mut st = lock(&self.inner);
         st.saved.remove(&id);
         st.lan.remove(&id);
+        st.attempted.remove(&id);
         write_saved(&st).map_err(|e| format!("guardando {}: {e}", PEERS_FILE))
     }
 
@@ -305,20 +325,26 @@ impl Peers {
     }
 }
 
-/// `true` si el par quedó registrado como conocido (aunque el dial no llegue
-/// a completarse: `connect_gossip` registra antes de dialear).
+/// `true` si el par quedó conectado (y por eso registrado como conocido).
+///
+/// Ver el doc del módulo: probar la conexión **antes** de registrarla evita
+/// que `resolve_shared_ticket` espere por un par que no responde al abrir los
+/// stores.
 async fn dial(
     inner: &Arc<Mutex<State>>,
     client: &IrohClient,
     id: EndpointId,
     budget: Duration,
 ) -> bool {
-    let ok = tokio::time::timeout(budget, client.connect_gossip(id))
+    {
+        let mut st = lock(inner);
+        st.attempted.insert(id);
+    }
+    let ok = tokio::time::timeout(budget, connect_peer(client, id))
         .await
         .map(|r| r.is_ok())
         .unwrap_or(false);
     let mut st = lock(inner);
-    st.lan.insert(id);
     if ok {
         st.dialed.insert(id);
     }
@@ -326,9 +352,43 @@ async fn dial(
         st.late.insert(id);
     }
     if !ok {
-        warn(&format!("sin conexión con el par {id}"));
+        warn(&format!(
+            "sin conexión con el par {id}: no responde (no se sincroniza con él)"
+        ));
     }
     ok
+}
+
+/// Conecta el par y, sólo si la conexión se estableció, lo deja registrado.
+///
+/// Es [`IrohClient::connect_gossip`] con el registro **después** del connect:
+/// la sonda no registra nada si el par no responde, y con la conexión ya viva
+/// `connect_gossip` la reutiliza (quinn reusa la conexión del mismo par y ALPN)
+/// y se la entrega a gossip para que la mantenga abierta.
+async fn connect_peer(client: &IrohClient, id: EndpointId) -> Result<(), String> {
+    let endpoint = {
+        let endpoint = client
+            .backend()
+            .get_endpoint()
+            .await
+            .map_err(|e| format!("sin endpoint: {e}"))?;
+        let guard = endpoint.read().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "sin endpoint".to_string())?
+    };
+    let probe = endpoint
+        .connect(id, iroh_gossip::ALPN)
+        .await
+        .map_err(|e| format!("conectando: {e}"))?;
+    let registrado = client
+        .connect_gossip(id)
+        .await
+        .map_err(|e| format!("registrando el par: {e}"));
+    // Con la conexión en gossip, soltar la sonda no la cierra.
+    drop(probe);
+    registrado
 }
 
 /// Levanta el descubrimiento mDNS propio y deja un watcher que conecta cada

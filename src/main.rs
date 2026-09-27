@@ -13,7 +13,7 @@ use dioxus::prelude::*;
 use crate::components::layout::{AuthProvider, SidebarProvider};
 use crate::components::theme::ThemeProvider;
 use crate::components::toast::{ToastContainer, ToastProvider};
-use views::{AdminPanel, Login, Projects, Settings};
+use views::{AdminPanel, Login, Projects, Settings, Users};
 
 /// Define a components module that contains all shared components for our app.
 mod components;
@@ -64,8 +64,11 @@ fn init_backend() {
     let initial = rt
         .block_on(services::project::list_projects(&db))
         .expect("listado inicial de proyectos");
+    let initial_users = rt
+        .block_on(services::auth::list_users(&db))
+        .expect("listado inicial de usuarios");
     log_to_file(&format!("main: {}", db.peers_summary()));
-    persistence::set_global(db, initial);
+    persistence::set_global(db, initial_users, initial);
     // Opt-in: `FEATHRAI_SENTINEL_PORT=15433` expone el Admin RPC de sentinel
     // para `guardian-sentinel --connect` (inspección en vivo, sin tocar el
     // lock redb).
@@ -96,6 +99,8 @@ enum Route {
     AdminPanel {},
     #[route("/admin/projects")]
     Projects {},
+    #[route("/admin/users")]
+    Users {},
 
 }
 

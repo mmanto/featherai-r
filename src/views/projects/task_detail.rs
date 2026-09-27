@@ -1,5 +1,5 @@
+use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::layout::use_auth;
-use crate::views::projects::confirm_dialog::ConfirmDialog;
 use crate::views::projects::state::{fmt_date, Task};
 use dioxus::prelude::*;
 use std::rc::Rc;

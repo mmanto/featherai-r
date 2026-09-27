@@ -36,6 +36,11 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # que las que ya resuelve guardian-db (Cargo.lock las fija).
 iroh = "1.1"
 iroh-mdns-address-lookup = "0.4"
+# `iroh_gossip::ALPN`: la sonda de alcance previa al registro de un par tiene
+# que usar el mismo ALPN que `IrohClient::connect_gossip` para reutilizar la
+# conexión en vez de abrir otra. Versión que ya fija Cargo.lock (la de
+# guardian-db).
+iroh-gossip = "0.101"
 # `StreamExt::next` del stream de descubrimiento mDNS; ya está en el árbol
 # vía iroh/guardian-db.
 futures-lite = "2"

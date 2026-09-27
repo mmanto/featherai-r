@@ -81,6 +81,10 @@ los pares *antes* de abrir la base (`src/net.rs`).
 - Un par que aparece **después** del arranque queda conectado, pero se une al espacio
   compartido recién en el próximo arranque (Ajustes lo marca: "se une a este espacio en
   el próximo arranque").
+- Un par **apagado o inalcanzable** al arrancar no bloquea la app: se le espera a lo sumo
+  2 s (`START_DIAL`), no queda registrado, y los stores reabren el espacio que ya tenían
+  (`Reopened existing iroh-docs document`), así que los datos siguen listándose y la
+  sincronización con ese par arranca sola cuando vuelva a estar accesible.
 - Con más de dos nodos, todos los que vean a alguno del grupo terminan en el mismo espacio.
 
 ### Diagnóstico
@@ -93,7 +97,9 @@ los pares *antes* de abrir la base (`src/net.rs`).
 - `Imported shared iroh-docs document via ticket` — se unió al espacio de un par;
   `Created new iroh-docs document` — creó un espacio propio (no había pares al abrir);
   `possible split-brain` — había un par que no respondió a tiempo (se repara reiniciando).
-- `sin conexión con el par …` / `mDNS no disponible` (líneas de `src/net.rs`).
+- `sin conexión con el par …` — ese par no respondió (apagado, en otra red o con multicast
+  bloqueado): la app sigue con el espacio que ya tenía y no se sincroniza con él;
+  `mDNS no disponible` — sin multicast, sólo quedan los pares configurados.
 
 ### Inspección en vivo (Guardian Sentinel)
 

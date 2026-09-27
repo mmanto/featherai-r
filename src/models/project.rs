@@ -190,7 +190,8 @@ impl Task {
 /// Proyecto — equivalente de `Project` en `types/project.ts`. El negocio es
 /// opcional (`None` = proyecto sin negocio) y se guarda por nombre; en React
 /// era `businessId` + servicio. No hay entidad propia de negocios: se crean
-/// desde el formulario de proyecto y se reutilizan por nombre.
+/// desde el formulario de proyecto y se reutilizan por nombre (el mismo espacio
+/// de nombres que `User.businesses`, ver [`crate::models::business`]).
 ///
 /// `created_at` (ms epoch) lo asigna la capa de servicios al persistir y se
 /// usa para ordenar el listado; `tasks` nunca viaja en el doc de metadatos

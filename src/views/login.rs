@@ -61,9 +61,10 @@ pub fn Login() -> Element {
                                 .await
                                 {
                                     Ok(Some(user)) => {
+                                        let landing = crate::components::protected_route::home_for_role(&user.role);
                                         auth.write().is_authenticated = true;
                                         auth.write().user = Some(user);
-                                        navigator.push("/admin/projects");
+                                        navigator.push(landing);
                                     }
                                     Ok(None) => {
                                         *form_error.write() =
@@ -79,14 +80,16 @@ pub fn Login() -> Element {
                             {
                                 // Demo web: cualquier credencial entra como super_admin.
                                 let _ = &pass;
-                                auth.write().is_authenticated = true;
-                                auth.write().user = Some(crate::models::User {
+                                let user = crate::models::User {
                                     username: user_input,
                                     nombre: Some("Admin".to_string()),
                                     role: "super_admin".to_string(),
                                     ..Default::default()
-                                });
-                                navigator.push("/admin/projects");
+                                };
+                                let landing = crate::components::protected_route::home_for_role(&user.role);
+                                auth.write().is_authenticated = true;
+                                auth.write().user = Some(user);
+                                navigator.push(landing);
                             }
                         });
                     },

@@ -25,7 +25,7 @@
 //! web/wasm este módulo no existe: `available()` es `false` y la UI usa el
 //! comportamiento demo en memoria.
 
-use crate::models::Project;
+use crate::models::{Project, User};
 use guardian_db::guardian::core::NewGuardianDBOptions;
 use guardian_db::guardian::error::GuardianError;
 use guardian_db::guardian::GuardianDB;
@@ -521,11 +521,14 @@ pub(crate) async fn open_stores(
 
 static GLOBAL_DB: OnceLock<Db> = OnceLock::new();
 static INITIAL_PROJECTS: OnceLock<Vec<Project>> = OnceLock::new();
+static INITIAL_USERS: OnceLock<Vec<User>> = OnceLock::new();
 
-/// Registra la base abierta en `init_backend` (una vez por proceso).
-pub fn set_global(db: Db, initial: Vec<Project>) {
+/// Registra la base abierta en `init_backend` (una vez por proceso) junto con
+/// los listados iniciales que consume la UI.
+pub fn set_global(db: Db, initial_users: Vec<User>, initial_projects: Vec<Project>) {
     let _ = GLOBAL_DB.set(db);
-    let _ = INITIAL_PROJECTS.set(initial);
+    let _ = INITIAL_USERS.set(initial_users);
+    let _ = INITIAL_PROJECTS.set(initial_projects);
 }
 
 /// Base global de la app.
@@ -547,6 +550,12 @@ pub fn try_db() -> Option<&'static Db> {
 /// siembra si correspondía) — para el estado de la UI.
 pub fn initial_projects() -> Vec<Project> {
     INITIAL_PROJECTS.get().cloned().unwrap_or_default()
+}
+
+/// Listado inicial de usuarios (el que se mostró al arrancar, tras la siembra
+/// del admin si correspondía) — para el estado de la UI.
+pub fn initial_users() -> Vec<User> {
+    INITIAL_USERS.get().cloned().unwrap_or_default()
 }
 
 /// `true` cuando la persistencia GuardianDB está disponible (nativo).

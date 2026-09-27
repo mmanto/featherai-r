@@ -1,3 +1,6 @@
+//! Diálogo de confirmación compartido — lo usan los borrados de proyectos y
+//! de usuarios.
+
 use dioxus::prelude::*;
 
 /// Diálogo de confirmación para acciones destructivas (borrados).

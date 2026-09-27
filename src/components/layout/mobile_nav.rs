@@ -9,7 +9,7 @@
 //! El breakpoint es CSS puro: este componente se renderiza siempre y el media
 //! query decide si se ve.
 
-use crate::components::layout::state::{use_auth, use_current_path, NAV_LINKS};
+use crate::components::layout::state::{NAV_LINKS, NavLink, use_auth, use_current_path};
 use crate::components::layout::user_menu::UserMenuItems;
 use dioxus::prelude::*;
 
@@ -29,11 +29,27 @@ pub fn MobileNav() -> Element {
         *sheet_open.write() = false;
     });
 
+    let auth = use_auth();
+
     // Igual que el `Sidebar`: sin sesión no hay navegación (la hoja expone
     // cerrar sesión/salir).
-    if !use_auth().read().is_authenticated {
+    if !auth.read().is_authenticated {
         return VNode::empty();
     }
+
+    // Mismas pestañas que el sidebar: sólo las que el rol de la sesión puede
+    // abrir (ver `NavLink::roles`).
+    let role = auth
+        .read()
+        .user
+        .as_ref()
+        .map(|u| u.role.clone())
+        .unwrap_or_default();
+    let links: Vec<NavLink> = NAV_LINKS
+        .iter()
+        .filter(|link| link.visible_for(&role))
+        .copied()
+        .collect();
 
     let is_active = move |to: &str| {
         let path = current();
@@ -62,7 +78,7 @@ pub fn MobileNav() -> Element {
 
         // ── Tab bar ──
         nav { class: "mobile-nav", aria_label: "Navegación principal",
-            for link in NAV_LINKS {
+            for link in links {
                 button {
                     key: "{link.to}",
                     class: format!(

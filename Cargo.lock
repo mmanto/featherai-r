@@ -2583,6 +2583,7 @@ dependencies = [
  "futures-lite",
  "guardian-db",
  "iroh",
+ "iroh-gossip",
  "iroh-mdns-address-lookup",
  "js-sys",
  "libc",

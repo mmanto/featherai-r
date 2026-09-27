@@ -1,4 +1,6 @@
-use crate::components::layout::state::{use_auth, use_current_path, use_sidebar, SIDEBAR_SECTIONS};
+use crate::components::layout::state::{
+    NavLink, SIDEBAR_SECTIONS, use_auth, use_current_path, use_sidebar,
+};
 use dioxus::prelude::*;
 
 /// Barra lateral de navegación — port de `Sidebar.tsx` de feathrai-frontend.
@@ -10,9 +12,31 @@ pub fn Sidebar() -> Element {
     let mut collapsed = use_sidebar();
     let navigator = use_navigator();
     let current = use_current_path();
+    let auth = use_auth();
 
-    if !use_auth().read().is_authenticated {
+    if !auth.read().is_authenticated {
         return VNode::empty();
+    }
+
+    // Ítems que el rol de la sesión puede abrir (ver `NavLink::roles`); las
+    // secciones sin ítems visibles no se dibujan (el título solo quedaría).
+    let role = auth
+        .read()
+        .user
+        .as_ref()
+        .map(|u| u.role.clone())
+        .unwrap_or_default();
+    let mut sections: Vec<(&str, Vec<NavLink>)> = Vec::new();
+    for section in SIDEBAR_SECTIONS {
+        let items: Vec<NavLink> = section
+            .items
+            .iter()
+            .filter(|link| link.visible_for(&role))
+            .copied()
+            .collect();
+        if !items.is_empty() {
+            sections.push((section.title, items));
+        }
     }
 
     let is_active = move |to: &str| {
@@ -43,10 +67,10 @@ pub fn Sidebar() -> Element {
 
             // ── Secciones de navegación ──
             div { class: "app-sidebar-content",
-                for section in SIDEBAR_SECTIONS {
-                    div { key: "{section.title}", class: "app-sidebar-section",
-                        div { class: "app-sidebar-section-title", span { "{section.title}" } }
-                        for link in section.items {
+                for (title, items) in sections {
+                    div { key: "{title}", class: "app-sidebar-section",
+                        div { class: "app-sidebar-section-title", span { "{title}" } }
+                        for link in items {
                             button {
                                 key: "{link.to}",
                                 class: format!(
