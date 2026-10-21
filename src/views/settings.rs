@@ -209,6 +209,132 @@ pub fn PeersCard() -> Element {
     rsx! {}
 }
 
+/// Texto del estado del servicio para la tarjeta.
+///
+/// La semántica de `Active` difiere por SO: en Linux la unidad systemd dice si
+/// el nodo esta corriendo; en Windows el estado se limita a "instalada".
+#[cfg(not(target_arch = "wasm32"))]
+fn service_estado(estado: &crate::service::Status) -> String {
+    use crate::service::Status;
+
+    match estado {
+        Status::NotInstalled => "No instalado".to_string(),
+        Status::Unavailable(motivo) => format!("No disponible: {motivo}"),
+        #[cfg(target_os = "linux")]
+        Status::Active => "Activo".to_string(),
+        #[cfg(target_os = "linux")]
+        Status::Inactive => "Instalado, detenido (arranca al iniciar sesión)".to_string(),
+        #[cfg(target_os = "windows")]
+        Status::Active | Status::Inactive => {
+            "Instalado (tarea programada, arranca al iniciar sesión)".to_string()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        Status::Active | Status::Inactive => "Instalado".to_string(),
+    }
+}
+
+/// Card del servicio de nodo (solo nativo): alta y baja del nodo headless que
+/// mantiene la sincronización con la app cerrada.
+///
+/// Con la app abierta el nodo **es** la app (el data dir lo tiene ella); por
+/// eso el `install` no arranca nada: el nodo entra cuando la app se cierra.
+#[cfg(not(target_arch = "wasm32"))]
+#[component]
+pub fn ServiceCard() -> Element {
+    use crate::components::toast::{show_toast, use_toast, ToastVariant};
+    use crate::service::Status;
+
+    let toasts = use_toast();
+    let mut estado = use_signal(crate::service::status);
+    let mut ocupado = use_signal(|| false);
+
+    // `systemctl`/`schtasks` bloquean: van a un hilo del runtime de la base
+    // (el de la UI no se puede bloquear), junto con el refresco del estado.
+    let mut accion = move |instalar: bool| {
+        if ocupado() {
+            return;
+        }
+        ocupado.set(true);
+        spawn(async move {
+            let rt = crate::persistence::db().rt.clone();
+            let resultado = rt
+                .spawn_blocking(move || {
+                    let resultado = if instalar {
+                        crate::service::install()
+                    } else {
+                        crate::service::uninstall()
+                    };
+                    (resultado, crate::service::status())
+                })
+                .await;
+            match resultado {
+                Ok((Ok(mensaje), nuevo)) => {
+                    show_toast(toasts, mensaje, ToastVariant::Success);
+                    estado.set(nuevo);
+                }
+                Ok((Err(e), nuevo)) => {
+                    show_toast(toasts, format!("No se pudo: {e}"), ToastVariant::Error);
+                    estado.set(nuevo);
+                }
+                Err(e) => show_toast(
+                    toasts,
+                    format!("No se pudo: el proceso auxiliar murió ({e})"),
+                    ToastVariant::Error,
+                ),
+            }
+            ocupado.set(false);
+        });
+    };
+
+    // En macOS/Android la API existe pero no hay servicio que ofrecer.
+    if !crate::service::os_supported() {
+        return rsx! {};
+    }
+
+    let actual = estado();
+    let estado_texto = service_estado(&actual);
+    let puede_instalar = !matches!(actual, Status::Unavailable(_));
+    let puede_quitar = !matches!(actual, Status::NotInstalled | Status::Unavailable(_));
+
+    rsx! {
+        div { class: "rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] shadow-[var(--shadow-sm)] mt-4",
+            div { class: "p-4",
+                h5 { class: "font-medium text-[var(--text-primary)] mb-1", "Servicio de nodo" }
+                p { class: "mb-3 text-xs text-[var(--text-secondary)]",
+                    "El nodo mantiene la sincronización con los otros equipos sin tener la app abierta. Mientras la app está abierta, el nodo es la app misma."
+                }
+                div { class: "flex flex-wrap items-center justify-between gap-2",
+                    div { class: "min-w-0",
+                        p { class: "mb-1 block text-xs font-medium tracking-wide text-[var(--text-secondary)]", "Estado" }
+                        p { class: "mb-0 text-[var(--text-primary)]", style: "font-size:0.8rem", "{estado_texto}" }
+                    }
+                    div { class: "flex flex-wrap gap-2",
+                        button {
+                            class: "inline-flex items-center justify-center rounded font-medium text-white bg-[var(--primary-color)] hover:opacity-90 disabled:opacity-50 px-2.5 py-1.5 text-sm",
+                            disabled: ocupado() || !puede_instalar,
+                            onclick: move |_| accion(true),
+                            "Instalar servicio"
+                        }
+                        button {
+                            class: "inline-flex items-center justify-center rounded border border-[var(--card-border)] text-[var(--text-secondary)] hover:bg-[var(--table-hover)] hover:text-[var(--text-primary)] disabled:opacity-50 px-2.5 py-1.5 text-sm",
+                            disabled: ocupado() || !puede_quitar,
+                            onclick: move |_| accion(false),
+                            "Quitar servicio"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// En web/wasm el servicio del sistema no existe: la card no se muestra.
+#[cfg(target_arch = "wasm32")]
+#[component]
+pub fn ServiceCard() -> Element {
+    rsx! {}
+}
+
 
 /// Ajustes de cuenta — equivalente de `pages/Settings.tsx` (`/settings`),
 /// protegida para cualquier usuario autenticado.
@@ -290,6 +416,7 @@ pub fn Settings() -> Element {
                 }
 
                 PeersCard {}
+                ServiceCard {}
             }
         }
     }

@@ -33,6 +33,10 @@ mod persistence;
 mod net;
 #[cfg(not(target_arch = "wasm32"))]
 mod services;
+/// Nodo headless (`--node`) y alta como servicio del SO (`--install-service`,
+/// `--uninstall-service`, `--service-status`) — solo nativo.
+#[cfg(not(target_arch = "wasm32"))]
+mod service;
 
 /// Abre GuardianDB (data dir por defecto o `FEATHRAI_DATA_DIR`), siembra
 /// demo/admin si el store está vacío y registra la base + el listado
@@ -40,27 +44,34 @@ mod services;
 ///
 /// Un runtime tokio propio (estático) para no depender del runtime de
 /// dioxus: GuardianDB necesita su propio loop de I/O.
+///
+/// `log_failure` duplica el error de apertura en `<data dir>/featherai.log`:
+/// lo pide el modo `--node` (en un Windows release no hay consola, y en Linux
+/// el journal de la unidad no lo ve el usuario).
 #[cfg(not(target_arch = "wasm32"))]
-fn init_backend() {
-    use std::sync::OnceLock;
-
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    let rt = RT.get_or_init(|| {
+fn init_backend(log_failure: bool) -> Result<(), persistence::AppError> {
+    /// Runtime propio de la base (GuardianDB necesita su loop de I/O,
+    /// independiente del de dioxus).
+    static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("runtime tokio de featherai")
     });
+    let rt: &'static tokio::runtime::Runtime = &RT;
     // Antes de abrir la base: captura también las trazas de la apertura de
     // stores (importación de espacios, descubrimiento).
     init_network_log();
     let dir = persistence::default_data_dir();
-    let db = rt
-        .block_on(persistence::open(dir))
-        .unwrap_or_else(|e| {
-            eprintln!("[featherai] error abriendo GuardianDB: {e}");
-            std::process::exit(1);
-        });
+    let db = match open_store(rt, dir) {
+        Ok(db) => db,
+        Err(e) => {
+            if log_failure {
+                log_to_file(&format!("main: error abriendo GuardianDB: {e}"));
+            }
+            return Err(e);
+        }
+    };
     let initial = rt
         .block_on(services::project::list_projects(&db))
         .expect("listado inicial de proyectos");
@@ -73,6 +84,195 @@ fn init_backend() {
     // para `guardian-sentinel --connect` (inspección en vivo, sin tocar el
     // lock redb).
     persistence::maybe_spawn_admin_rpc();
+    Ok(())
+}
+
+/// Abre la base tolerando que el data dir esté tomado un instante.
+///
+/// El nodo del sistema y esta GUI son dueños del mismo data dir **por turnos**
+/// ([`service::stop_node`]): si el lock todavía no se soltó, se reintenta ~2 s,
+/// pero **sólo** si el error es de lock (ningún otro error se arregla
+/// esperando).
+#[cfg(not(target_arch = "wasm32"))]
+fn open_store(
+    rt: &tokio::runtime::Runtime,
+    dir: std::path::PathBuf,
+) -> Result<persistence::Db, persistence::AppError> {
+    const INTENTOS: u32 = 6;
+    const ESPERA: std::time::Duration = std::time::Duration::from_millis(400);
+
+    let mut ultimo = None;
+    for intento in 1..=INTENTOS {
+        match rt.block_on(persistence::open(dir.clone())) {
+            Ok(db) => return Ok(db),
+            Err(e) => {
+                if !is_lock_error(&e) {
+                    return Err(e);
+                }
+                if intento < INTENTOS {
+                    std::thread::sleep(ESPERA);
+                }
+                ultimo = Some(e);
+            }
+        }
+    }
+    Err(ultimo.expect("el loop de reintentos deja un error de lock"))
+}
+
+/// `true` si el error es "el data dir ya está abierto": los tres textos que
+/// emite la cadena redb → guardian-db (`Cannot acquire lock.` es el de redb
+/// 4.2, `already open` el de los stores, `os error 32` el *sharing violation*
+/// de Windows).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_lock_error(e: &persistence::AppError) -> bool {
+    let texto = e.to_string();
+    ["Cannot acquire lock", "already open", "os error 32"]
+        .iter()
+        .any(|marca| texto.contains(marca))
+}
+
+/// Cierra una apertura fallida con su código de salida: 3 si el data dir está
+/// tomado (otra instancia o el servicio), 1 en cualquier otro caso.
+///
+/// El 3 no es decorativo: `RestartPreventExitStatus=3` en la unidad systemd
+/// evita que el nodo entre en bucle de reinicio mientras la GUI tiene la base.
+#[cfg(not(target_arch = "wasm32"))]
+fn exit_on_open_failure(e: &persistence::AppError) -> ! {
+    let mensaje = format!("[featherai] error abriendo GuardianDB: {e}");
+    eprintln!("{mensaje}");
+    log_to_file(&format!("main: {mensaje}"));
+    if is_lock_error(e) {
+        let pista = service::lock_hint();
+        eprintln!("[featherai] {pista}");
+        log_to_file(&format!("main: {pista}"));
+        std::process::exit(3);
+    }
+    std::process::exit(1);
+}
+
+/// Imprime el resultado de `--install-service`/`--uninstall-service` y sale
+/// con el código fijo (0 ok, 1 error).
+#[cfg(not(target_arch = "wasm32"))]
+fn report(resultado: Result<String, String>, accion: &str) -> ! {
+    match resultado {
+        Ok(mensaje) => {
+            println!("{mensaje}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            let mensaje = format!("[featherai] no se pudo {accion} el servicio: {e}");
+            eprintln!("{mensaje}");
+            log_to_file(&format!("main: {mensaje}"));
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Modo `--node`: nodo headless (sin ventana) hasta SIGTERM/SIGINT.
+///
+/// Es el proceso que arranca el servicio del SO: abre **la misma** base y la
+/// misma identidad iroh que la GUI y se queda vivo para replicar (endpoint
+/// Iroh + mDNS + stores) sin crear ventana ni tocar dioxus/webkit.
+#[cfg(not(target_arch = "wasm32"))]
+fn node_main() -> ! {
+    init_network_log();
+    let (data_dir, migracion) = persistence::prepare_data_dir();
+    log_to_file(&format!(
+        "main: nodo headless (pid={}, exe={:?})",
+        std::process::id(),
+        std::env::current_exe()
+    ));
+    log_to_file(&format!("main: data dir {data_dir:?}"));
+    for nota in &migracion {
+        log_to_file(nota);
+    }
+    if let Err(e) = init_backend(true) {
+        exit_on_open_failure(&e);
+    }
+    let db = persistence::db();
+    log_to_file(&format!(
+        "main: nodo headless listo (data dir {})",
+        db.data_dir().display()
+    ));
+    db.rt.block_on(wait_for_shutdown_signal());
+    log_to_file("main: nodo detenido por señal");
+    // Presupuesto acotado, menor que el `TimeoutStopSec=6` de la unidad: el
+    // shutdown de Iroh tarda ~15 s y el arranque de la GUI no puede esperar
+    // todo eso. redb es ACID y el SO libera los locks al salir, así que cortar
+    // acá no pierde nada (el que reabra reconverge por iroh-docs).
+    //
+    // El `timeout` se construye **dentro** del futuro a propósito:
+    // `Handle::block_on` establece el contexto de runtime al *pollear*, no
+    // antes, y `Sleep::new_timeout` panickea sin él ("there is no reactor
+    // running").
+    let _ = db.rt.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(3), db.close()).await
+    });
+    std::process::exit(0);
+}
+
+/// Cierre ordenado de la GUI: opcionalmente oculta la ventana, cierra la base
+/// (flush + liberación de los locks) y le devuelve el data dir al nodo.
+#[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
+pub fn shutdown_and_exit(hide_window: bool) -> ! {
+    log_to_file("main: cierre ordenado");
+    if hide_window {
+        // El cierre de abajo bloquea el hilo que llama (el shutdown de Iroh
+        // tarda ~15 s): mejor cerrar la ventana antes de congelar la UI.
+        dioxus::desktop::window().set_visible(false);
+    }
+    if let Some(db) = persistence::try_db() {
+        db.close_blocking();
+        log_to_file("main: base cerrada; locks liberados");
+    }
+    if let Err(e) = service::start_node() {
+        let mensaje = format!("main: no pude volver a arrancar el nodo del servicio: {e}");
+        log_to_file(&mensaje);
+        eprintln!("[featherai] {e}");
+    }
+    std::process::exit(0);
+}
+
+/// Espera la señal de cierre del SO.
+///
+/// En la GUI es lo que garantiza que el nodo vuelva aunque el proceso no salga
+/// por el menú `Salir` (SIGTERM del gestor de sesión o de `systemctl`, Ctrl+C);
+/// en el modo `--node` es la única forma de salir.
+#[cfg(not(target_arch = "wasm32"))]
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut terminar = match signal(SignalKind::terminate()) {
+            Ok(signal) => signal,
+            // Sin SIGTERM (raro): al menos Ctrl+C.
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        match signal(SignalKind::interrupt()) {
+            Ok(mut interrumpir) => tokio::select! {
+                _ = terminar.recv() => {}
+                _ = interrumpir.recv() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            },
+            Err(_) => tokio::select! {
+                _ = terminar.recv() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            },
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Windows no tiene SIGTERM.
+        let _ = tokio::signal::ctrl_c().await;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        std::future::pending::<()>().await;
+    }
 }
 
 /// The Route enum is used to define the structure of internal routes in our app. All route enums need to derive
@@ -234,9 +434,30 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         install_diagnostics();
+        // Subcomandos de nodo/servicio: se resuelven acá, antes de crear la
+        // ventana y antes de tocar el data dir (el modo `--node` no crea
+        // ventana ninguna; los otros terminan con `exit`).
+        match service::action_from_args(std::env::args().skip(1)) {
+            Some(service::Action::Status) => {
+                println!("{}", service::status_line());
+                std::process::exit(0);
+            }
+            Some(service::Action::Install) => report(service::install(), "instalar"),
+            Some(service::Action::Uninstall) => report(service::uninstall(), "quitar"),
+            Some(service::Action::Node) => node_main(),
+            None => {}
+        }
         // Antes de crear la ventana: WebKit lee estas variables al inicializar
         // el webview (sin esto, ventana gris con driver NVIDIA + X11).
         quirk_webkit();
+        // La app pasa a ser el nodo: si el servicio está instalado, suelta el
+        // data dir (y espera a que el proceso termine; recién después se abre
+        // la base).
+        if let Err(e) = service::stop_node() {
+            let mensaje = format!("main: no pude detener el nodo del servicio: {e}");
+            log_to_file(&mensaje);
+            eprintln!("[featherai] {e}");
+        }
         // Antes de escribir el log: si la base quedó en un data dir heredado
         // (`$HOME/.local/share/featherai` en cualquier SO, o `%APPDATA%\featherai`),
         // se mueve al data dir del SO (ver `persistence::prepare_data_dir`).
@@ -256,8 +477,24 @@ fn main() {
         for nota in &migracion {
             log_to_file(nota);
         }
-        init_backend();
+        if let Err(e) = init_backend(false) {
+            exit_on_open_failure(&e);
+        }
         log_to_file("main: backend GuardianDB listo; lanzando la ventana");
+        // Con la ventana abierta, un cierre que no pasa por el menú `Salir`
+        // (SIGTERM del gestor de sesión o de systemctl) tiene que cerrar la
+        // base y devolverle el data dir al nodo.
+        //
+        // Ojo: en builds **debug** `dioxus-desktop` instala su propio handler
+        // de SIGTERM/SIGINT (preservar el estado de la ventana) y termina el
+        // proceso en ~30 ms, así que ahí este cierre puede quedar cortado; en
+        // release (lo que se empaqueta) ese handler no existe.
+        #[cfg(feature = "desktop")]
+        persistence::db().rt.spawn(async {
+            wait_for_shutdown_signal().await;
+            log_to_file("main: señal de cierre recibida");
+            shutdown_and_exit(false);
+        });
     }
 
     // Ventana maximizada y sin barra de título/menú. Al no haber botón de

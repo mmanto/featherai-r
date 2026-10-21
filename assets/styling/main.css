@@ -4,12 +4,12 @@
    [data-theme="dark"] = tema oscuro
    El atributo lo setea ThemeProvider (Rust) sobre <html>. */
 :root {
-  --primary-color: #00A3F0;
+  --primary-color: #3c9dcb;
   --secondary-color: #6c757d;
   --success-color: #28a745;
   --danger-color: #dc3545;
   --warning-color: #ffc107;
-  --info-color: #17a2b8;
+  --info-color: #1a8b9c;
 
   --bg-primary: #ffffff;
   --bg-secondary: #f8f9fa;

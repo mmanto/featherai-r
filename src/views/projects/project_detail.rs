@@ -1,7 +1,9 @@
+use crate::components::layout::use_business_scope;
+use crate::models::{NEW_BUSINESS, project_business_options, resolve_business};
 use crate::views::projects::gantt_chart::GanttChart;
 use crate::views::projects::kanban_board::KanbanBoard;
 use crate::views::projects::project_tasks_list::ProjectTasksList;
-use crate::views::projects::state::{fmt_date, Project, Task, ViewMode};
+use crate::views::projects::state::{fmt_date, use_projects, Project, Task, ViewMode};
 use crate::views::projects::task_detail::TaskDetail;
 use dioxus::prelude::*;
 
@@ -197,15 +199,34 @@ pub fn ProjectDetail(
 }
 
 /// Modal de edición de datos básicos del proyecto (mismo formulario que
-/// `NewProjectModal` pero precargado).
+/// `NewProjectModal` pero precargado), incluido el negocio.
 #[component]
 fn EditProjectModal(
     project: Project,
     on_close: EventHandler<()>,
     on_save: EventHandler<Project>,
 ) -> Element {
+    let state = use_projects();
+    // Alcance del rol, igual que en el alta: administración general elige
+    // libremente (demo + usados + "Nuevo negocio…"); admin/operativo sólo
+    // dentro de sus negocios — fuera de ellos el proyecto desaparecería de su
+    // propio listado.
+    let scope = use_business_scope()();
+    let es_super_admin = scope.is_none();
+    let options = project_business_options(
+        scope.as_deref(),
+        state
+            .read()
+            .projects
+            .iter()
+            .filter_map(|p| p.business.clone()),
+        project.business.as_deref(),
+    );
     let mut name = use_signal(|| project.name.clone());
     let mut description = use_signal(|| project.description.clone().unwrap_or_default());
+    // "" = sin negocio; NEW_BUSINESS = el usuario está escribiendo uno nuevo.
+    let mut business = use_signal(|| project.business.clone().unwrap_or_default());
+    let mut new_business = use_signal(String::new);
     let mut start_date = use_signal(|| project.start_date.clone().unwrap_or_default());
     let mut end_date = use_signal(|| project.end_date.clone().unwrap_or_default());
     let mut status = use_signal(|| project.status);
@@ -218,8 +239,18 @@ fn EditProjectModal(
         if name.is_empty() {
             return;
         }
+        // Negocio elegido: ninguno, uno existente o uno recién escrito.
+        let Some(business_name) = resolve_business(&business(), &new_business()) else {
+            return; // pidió crear un negocio pero no escribió el nombre
+        };
+        // admin/operativo no pueden dejarlo sin negocio: el proyecto quedaría
+        // fuera de su listado.
+        if !es_super_admin && business_name.is_none() {
+            return;
+        }
         let mut updated = project.clone();
         updated.name = name;
+        updated.business = business_name;
         updated.description = {
             let d = description().trim().to_string();
             if d.is_empty() {
@@ -264,6 +295,31 @@ fn EditProjectModal(
                         button { class: "flex h-8 w-8 items-center justify-center rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]", onclick: move |_| on_close.call(()), i { class: "bi bi-x-lg" } }
                     }
                     div { class: "p-4",
+                        div { class: "mb-3",
+                            label { class: "mb-1 block text-xs font-medium tracking-wide text-[var(--text-secondary)]", "Empresa / Negocio" }
+                            select {
+                                class: "block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:outline-none",
+                                value: business(),
+                                onchange: move |e| business.set(e.value()),
+                                if es_super_admin {
+                                    option { value: "", selected: business().is_empty(), "— Sin negocio —" }
+                                }
+                                for option in &options {
+                                    option { key: "{option}", value: "{option}", selected: business() == *option, "{option}" }
+                                }
+                                if es_super_admin {
+                                    option { value: NEW_BUSINESS, selected: business() == NEW_BUSINESS, "Nuevo negocio…" }
+                                }
+                            }
+                            if es_super_admin && business() == NEW_BUSINESS {
+                                input {
+                                    class: "mt-2 block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:shadow-[0_0_0_3px_rgba(0,163,240,0.12)] focus:outline-none",
+                                    value: new_business(),
+                                    oninput: move |e| new_business.set(e.value()),
+                                    placeholder: "Nombre del nuevo negocio",
+                                }
+                            }
+                        }
                         div { class: "mb-3",
                             label { class: "mb-1 block text-xs font-medium tracking-wide text-[var(--text-secondary)]", "Nombre *" }
                             input { class: "block w-full rounded border border-[var(--border-color)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--primary-color)] focus:shadow-[0_0_0_3px_rgba(0,163,240,0.12)] focus:outline-none", value: name(), oninput: move |e| name.set(e.value()) }

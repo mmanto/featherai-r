@@ -136,6 +136,42 @@ Los tests de convergencia entre dos nodos (red real en loopback) están en
 `cargo test --bin featherai peers_tests -- --test-threads=1` (el de mDNS requiere
 multicast: agregar `--ignored`).
 
+### Nodo 24/7 como servicio del sistema
+
+Con la app cerrada no hay proceso que escuche la red, así que ese equipo no replica. El
+mismo binario puede correr como **nodo headless** (sin ventana) registrado como servicio
+del SO, y la app lo **para cuando abre** (pasa a ser ella el nodo) y lo **vuelve a arrancar
+cuando se cierra**, porque redb toma un lock exclusivo por archivo y el data dir admite un
+solo dueño por vez.
+
+Se instala desde *Ajustes → Servicio de nodo* (instalar/quitar + estado) o por línea de
+comandos:
+
+```bash
+featherai --install-service     # alta del servicio (no lo arranca: la app tiene el lock)
+featherai --uninstall-service   # baja
+featherai --service-status      # estado en una línea
+featherai --node                # nodo headless (es lo que arranca el servicio)
+```
+
+- **Linux:** unidad de **usuario** `featherai-node.service` en
+  `~/.config/systemd/user/` (respeta `$XDG_CONFIG_HOME`), con `Restart=on-failure` y
+  `loginctl enable-linger $USER` para que siga viva sin sesión abierta. Estado y trazas:
+  `systemctl --user status featherai-node`, `journalctl --user -u featherai-node -f`.
+- **Windows:** tarea programada `featherai-node` al iniciar sesión (`schtasks /sc ONLOGON`),
+  per-usuario y sin elevación. `schtasks /query /tn featherai-node /fo list /v`.
+- **Variables:** la unidad que se genera copia las de esta corrida que cambian *qué base
+  abre y con quién habla* (`FEATHRAI_DATA_DIR`, `FEATHRAI_PEERS`, `FEATHRAI_LAN_WAIT_MS`,
+  `FEATHRAI_LOG`). Si cambiás alguna, reinstalá (`--install-service`).
+- **Rutas:** la unidad apunta al ejecutable que la instaló (en un `.AppImage`, al `.AppImage`
+  en sí vía `$APPIMAGE`). Si movés o actualizás la app de ruta, reinstalá el servicio.
+
+Códigos de salida del nodo: `0` al detenerse por SIGTERM/SIGINT, `3` si el data dir ya está
+tomado por otra instancia o por la app (`RestartPreventExitStatus=3` evita que systemd
+reintente en bucle; la app lo levanta al cerrarse). La app también loguea el handoff en
+`featherai.log` (`señal de cierre recibida`, `cierre ordenado`, `base cerrada; locks
+liberados`, y el motivo si no pudo parar o arrancar el nodo).
+
 ## Building installers (Linux / Windows)
 
 `dx bundle` packages the app **for the operating system that runs the command**.

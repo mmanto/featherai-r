@@ -33,29 +33,13 @@ pub fn logout(mut auth: Signal<AuthState>) {
 /// Sale de la aplicación terminando el proceso.
 ///
 /// Sin barra de título no hay botón de cierre nativo, así que el cierre se
-/// dispara desde la UI. Antes de salir hace el cierre ordenado de GuardianDB
-/// ([`crate::persistence::Db::close_blocking`]: flush de stores y backend
-/// Iroh, esperado desde un hilo propio porque el hilo de la UI ya corre dentro
-/// del runtime de dioxus desktop). Solo tiene efecto en desktop; en web/server
-/// es no-op.
+/// dispara desde la UI. El cierre ordenado (ocultar la ventana, flush de los
+/// stores y backend Iroh, devolver el data dir al servicio del nodo) vive en
+/// [`crate::shutdown_and_exit`]: acá sólo se lo invoca con la ventana visible.
+/// Solo tiene efecto en desktop; en web/server es no-op.
 pub fn exit_app() {
     #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
-    {
-        // Ocultar ya: el cierre ordenado de abajo bloquea el hilo de la UI
-        // (el shutdown de Iroh tarda ~15 s) y la ventana quedaría congelada.
-        dioxus::desktop::window().set_visible(false);
-        if let Some(db) = crate::persistence::try_db() {
-            // `close_blocking` espera desde un hilo propio: acá ya estamos
-            // dentro del runtime de dioxus desktop, donde `Handle::block_on`
-            // panickea.
-            db.close_blocking();
-        }
-    }
-    // `dioxus::desktop::window().close()` no alcanza: la ventana desaparece
-    // pero el event loop de dioxus sigue vivo sin ventanas y el proceso queda
-    // colgado. Ya con la base cerrada, se termina el proceso.
-    #[cfg(feature = "desktop")]
-    std::process::exit(0);
+    crate::shutdown_and_exit(true);
 }
 
 /// Ícono de navegación — clase de Bootstrap Icons (mismo contrato que el

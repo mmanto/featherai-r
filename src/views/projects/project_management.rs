@@ -1,7 +1,7 @@
 use crate::components::layout::{AppLayout, use_business_scope};
 use crate::components::protected_route::{PROJECT_ROLES, ProtectedRoute};
 use crate::components::toast::{show_toast, use_toast, ToastVariant};
-use crate::models::{NEW_BUSINESS, business_options};
+use crate::models::{NEW_BUSINESS, project_business_options, resolve_business};
 use crate::views::projects::project_detail::ProjectDetail;
 use crate::views::projects::projects_grid::ProjectsGrid;
 use crate::views::projects::state::{
@@ -187,17 +187,15 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
     // el proyecto no aparecería en su propio listado.
     let scope = use_business_scope()();
     let es_super_admin = scope.is_none();
-    let options = if es_super_admin {
-        business_options(
-            state
-                .read()
-                .projects
-                .iter()
-                .filter_map(|p| p.business.clone()),
-        )
-    } else {
-        scope.clone().unwrap_or_default()
-    };
+    let options = project_business_options(
+        scope.as_deref(),
+        state
+            .read()
+            .projects
+            .iter()
+            .filter_map(|p| p.business.clone()),
+        None,
+    );
     let mut name = use_signal(String::new);
     let mut description = use_signal(String::new);
     // "" = sin negocio (sólo administración general puede dejarlo vacío);
@@ -223,19 +221,8 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
             return;
         }
         // Negocio elegido: ninguno, uno existente o uno recién escrito.
-        let business_name = {
-            let selection = business();
-            if selection == NEW_BUSINESS {
-                let created = new_business().trim().to_string();
-                if created.is_empty() || created == NEW_BUSINESS {
-                    return; // pidió crear un negocio pero no escribió el nombre
-                }
-                Some(created)
-            } else if selection.is_empty() {
-                None
-            } else {
-                Some(selection)
-            }
+        let Some(business_name) = resolve_business(&business(), &new_business()) else {
+            return; // pidió crear un negocio pero no escribió el nombre
         };
         // admin/operativo crean siempre dentro de un negocio propio (el selector
         // no ofrece otra cosa); sin negocio el proyecto sería invisible para él.
@@ -299,13 +286,13 @@ fn NewProjectModal(on_close: EventHandler<()>, on_submit: EventHandler<Project>)
                                 value: business(),
                                 onchange: move |e| business.set(e.value()),
                                 if es_super_admin {
-                                    option { value: "", "— Sin negocio —" }
+                                    option { value: "", selected: business().is_empty(), "— Sin negocio —" }
                                 }
                                 for option in &options {
-                                    option { key: "{option}", value: "{option}", "{option}" }
+                                    option { key: "{option}", value: "{option}", selected: business() == *option, "{option}" }
                                 }
                                 if es_super_admin {
-                                    option { value: NEW_BUSINESS, "Nuevo negocio…" }
+                                    option { value: NEW_BUSINESS, selected: business() == NEW_BUSINESS, "Nuevo negocio…" }
                                 }
                             }
                             if es_super_admin && business() == NEW_BUSINESS {
