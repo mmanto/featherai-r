@@ -144,6 +144,32 @@ impl Db {
         Ok(id.to_string())
     }
 
+    /// Coordinadores oídos que el usuario todavía no aceptó (Ajustes → Nodos
+    /// pares muestra un aviso con "Aceptar"/"Ignorar").
+    pub fn pending_coordinators(&self) -> Vec<String> {
+        self.peers.pending_coordinators()
+    }
+
+    /// Acepta un coordinador: lo guarda en `peers.txt`, lo conecta y deja de
+    /// mostrarlo como pendiente. Devuelve el id canónico y si la conexión se
+    /// estableció.
+    pub async fn accept_coordinator(&self, raw: &str) -> Result<(String, bool), AppError> {
+        let id = parse_peer_id(raw)?;
+        let conectado = self
+            .peers
+            .accept_coordinator(id)
+            .await
+            .map_err(AppError::Store)?;
+        Ok((id.to_string(), conectado))
+    }
+
+    /// Ignora un coordinador pendiente (deja de preguntar por él esta corrida).
+    pub fn ignore_coordinator(&self, raw: &str) -> Result<String, AppError> {
+        let id = parse_peer_id(raw)?;
+        self.peers.ignore_coordinator(id);
+        Ok(id.to_string())
+    }
+
     /// Cierre ordenado: cierra los tres stores y hace shutdown del backend
     /// Iroh (endpoint + flush), liberando los locks de archivo redb.
     ///

@@ -42,7 +42,8 @@ iroh-mdns-address-lookup = "0.4"
 # guardian-db).
 iroh-gossip = "0.101"
 # `StreamExt::next` del stream de descubrimiento mDNS; ya está en el árbol
-# vía iroh/guardian-db.
+# vía iroh/guardian-db. (`futures_lite::Stream` re-exporta `futures_core::Stream`,
+# así que sirve también para el stream `watch_messages` de guardian-db.)
 futures-lite = "2"
 # Log de red opt-in (`FEATHRAI_LOG=info|debug|trace`): trazas de iroh/
 # guardian-db al `<data dir>/featherai.log`. Sin la variable no se instala.

@@ -252,6 +252,8 @@ async fn dos_nodos_se_descubren_en_la_red_interna() {
     let join = || crate::net::Join {
         configured: false,
         lan: true,
+        group: false,
+        coordinator: false,
         lan_wait: Duration::from_secs(8),
     };
     let (peers_a, peers_b) = tokio::join!(
@@ -295,4 +297,149 @@ async fn dos_nodos_se_descubren_en_la_red_interna() {
 
     db_small.close().await.unwrap();
     db_big.close().await.unwrap();
+}
+
+/// Sin configurarse entre sí, dos miembros que conocen al mismo coordinador se
+/// descubren por el grupo (gossip) — opción A. A es el coordinador; B y C lo
+/// agregan como par guardado (`peers.txt`) y, por la malla, se descubren
+/// mutuamente aunque ninguno configuró al otro.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dos_miembros_se_descubren_por_el_grupo() {
+    let tmp_a = tempfile::tempdir().unwrap();
+    let tmp_b = tempfile::tempdir().unwrap();
+    let tmp_c = tempfile::tempdir().unwrap();
+
+    let a = nuevo_nodo(tmp_a.path()).await;
+    let b = nuevo_nodo(tmp_b.path()).await;
+    let c = nuevo_nodo(tmp_c.path()).await;
+    let (id_a, id_b, id_c) = (a.node_id(), b.node_id(), c.node_id());
+
+    // Direcciones de loopback entre todos (el gossip dialea a los miembros).
+    a.add_node_addr(loopback_addr(&b).await).await.unwrap();
+    a.add_node_addr(loopback_addr(&c).await).await.unwrap();
+    b.add_node_addr(loopback_addr(&a).await).await.unwrap();
+    b.add_node_addr(loopback_addr(&c).await).await.unwrap();
+    c.add_node_addr(loopback_addr(&a).await).await.unwrap();
+    c.add_node_addr(loopback_addr(&b).await).await.unwrap();
+
+    // B y C guardan a A como par (el "coordinador"); A no configura a nadie.
+    std::fs::write(tmp_b.path().join(crate::net::PEERS_FILE), format!("{id_a}\n")).unwrap();
+    std::fs::write(tmp_c.path().join(crate::net::PEERS_FILE), format!("{id_a}\n")).unwrap();
+
+    let join_coord = || crate::net::Join {
+        configured: false,
+        lan: false,
+        group: true,
+        coordinator: false,
+        lan_wait: Duration::ZERO,
+    };
+    let join_miembro = || crate::net::Join {
+        configured: true,
+        lan: false,
+        group: true,
+        coordinator: false,
+        lan_wait: Duration::ZERO,
+    };
+
+    // `_peers_a` queda vivo hasta el final: mantiene al coordinador (A) en la
+    // malla durante toda la prueba.
+    let _peers_a = crate::net::Peers::start(&a, tmp_a.path(), join_coord()).await;
+    let peers_b = crate::net::Peers::start(&b, tmp_b.path(), join_miembro()).await;
+    let peers_c = crate::net::Peers::start(&c, tmp_c.path(), join_miembro()).await;
+
+    // B y C no se configuraron mutuamente: se descubren por el grupo.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let vb = peers_b.peers();
+        let vc = peers_c.peers();
+        let b_ve_c = vb.iter().any(|p| p.id == id_c.to_string() && p.connected);
+        let c_ve_b = vc.iter().any(|p| p.id == id_b.to_string() && p.connected);
+        if b_ve_c && c_ve_b {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("el grupo no los descubrió en 30 s: B={vb:?} C={vc:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Un nodo que oye a un coordinador (vía el grupo) **no** lo auto-conecta: lo
+/// deja pendiente y el usuario lo acepta explícitamente. A es el coordinador; M
+/// lo acepta (lo guarda); B entra al grupo vía M y oye a A sin haberlo
+/// configurado, así que le aparece como pendiente.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn el_coordinador_requiere_aceptacion() {
+    let tmp_a = tempfile::tempdir().unwrap();
+    let tmp_m = tempfile::tempdir().unwrap();
+    let tmp_b = tempfile::tempdir().unwrap();
+
+    let a = nuevo_nodo(tmp_a.path()).await;
+    let m = nuevo_nodo(tmp_m.path()).await;
+    let b = nuevo_nodo(tmp_b.path()).await;
+    let (id_a, id_m) = (a.node_id(), m.node_id());
+
+    // Direcciones de loopback entre todos (el gossip dialea a los miembros).
+    a.add_node_addr(loopback_addr(&b).await).await.unwrap();
+    a.add_node_addr(loopback_addr(&m).await).await.unwrap();
+    b.add_node_addr(loopback_addr(&a).await).await.unwrap();
+    b.add_node_addr(loopback_addr(&m).await).await.unwrap();
+    m.add_node_addr(loopback_addr(&a).await).await.unwrap();
+    m.add_node_addr(loopback_addr(&b).await).await.unwrap();
+
+    // M acepta a A (lo guarda); B sólo conoce a M.
+    std::fs::write(tmp_m.path().join(crate::net::PEERS_FILE), format!("{id_a}\n")).unwrap();
+    std::fs::write(tmp_b.path().join(crate::net::PEERS_FILE), format!("{id_m}\n")).unwrap();
+
+    let join_coord = || crate::net::Join {
+        configured: false,
+        lan: false,
+        group: true,
+        coordinator: true,
+        lan_wait: Duration::ZERO,
+    };
+    let join_miembro = || crate::net::Join {
+        configured: true,
+        lan: false,
+        group: true,
+        coordinator: false,
+        lan_wait: Duration::ZERO,
+    };
+
+    let _peers_a = crate::net::Peers::start(&a, tmp_a.path(), join_coord()).await;
+    let _peers_m = crate::net::Peers::start(&m, tmp_m.path(), join_miembro()).await;
+    let peers_b = crate::net::Peers::start(&b, tmp_b.path(), join_miembro()).await;
+
+    // B oye a A (coordinador) y lo deja pendiente, sin auto-conectarlo.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let pend = peers_b.pending_coordinators();
+        if pend.iter().any(|p| *p == id_a.to_string()) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("B no registró al coordinador A como pendiente: {pend:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    assert!(
+        !peers_b.peers().iter().any(|p| p.id == id_a.to_string() && p.connected),
+        "B no debería haber conectado al coordinador sin aceptarlo"
+    );
+
+    // Aceptar lo guarda, lo conecta y lo saca de pendientes.
+    let conectado = peers_b.accept_coordinator(id_a).await.unwrap();
+    assert!(conectado, "el coordinador aceptado debería quedar conectado");
+    assert!(
+        peers_b.pending_coordinators().is_empty(),
+        "A debería salir de la lista de pendientes"
+    );
+    assert!(
+        peers_b
+            .peers()
+            .iter()
+            .any(|p| p.id == id_a.to_string() && p.connected && p.source == crate::net::Source::Saved),
+        "A debería quedar guardado y conectado"
+    );
 }

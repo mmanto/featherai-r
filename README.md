@@ -71,6 +71,29 @@ los pares *antes* de abrir la base (`src/net.rs`).
 - `FEATHRAI_LAN_WAIT_MS` (por defecto `2500`): espera del descubrimiento LAN antes de
   abrir la base. `0` no espera (sólo conecta lo que ya esté en `peers.txt`/`FEATHRAI_PEERS`).
 
+### Muchos nodos en redes distintas: el grupo (coordinador)
+
+El intercambio de ids por mDNS sólo funciona dentro de una misma red. Para que **N nodos en
+redes separadas se descubran entre sí automáticamente**, alcanza con un **coordinador**: un nodo
+con id estable (típicamente `featherai --node` corriendo 24/7 en un VPS/NAS/PC) marcado como tal
+con `FEATHRAI_COORDINATOR=1`. El coordinador **anuncia su rol** (por gossip al grupo, y por su
+propio servicio mDNS `featherai-coordinator` en la LAN).
+
+Cuando un nodo oye a un coordinador que no conoce, **no** lo conecta solo: en
+*Ajustes → Nodos pares* aparece un aviso **"Coordinador detectado"** con *Aceptar*/*Ignorar*.
+Al **aceptarlo**, el nodo lo guarda (`peers.txt`), lo conecta y —desde ese momento— intercambia
+ids y se agrega al resto del grupo automáticamente:
+
+- cada miembro se une al topic de grupo (`featherai`, por gossip) usando al coordinador como
+  bootstrap;
+- cada miembro **anuncia su id** al grupo y **escucha los anuncios** de los demás, así que
+  se conectan entre sí sin haberse configurado mutuamente;
+- el coordinador sólo reparte ids de membresía: los datos siguen yendo peer-to-peer (relay o
+  directo), no lo atraviesan.
+
+En *Ajustes* estos pares aparecen con origen **"grupo"**; el coordinador aceptado queda como par
+**"guardado"**.
+
 ### Qué esperar al conectar dos instalaciones
 
 - Cuando un nodo ve al otro **al arrancar**, importa su espacio: a partir de ahí los dos

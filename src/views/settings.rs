@@ -19,6 +19,7 @@ fn peer_source(source: crate::net::Source) -> &'static str {
         crate::net::Source::Env => "FEATHRAI_PEERS",
         crate::net::Source::Saved => "guardado",
         crate::net::Source::Lan => "red interna",
+        crate::net::Source::Group => "grupo",
     }
 }
 
@@ -45,6 +46,7 @@ pub fn PeersCard() -> Element {
 
     let mut input = use_signal(String::new);
     let mut lista = use_signal(|| crate::persistence::db().peers());
+    let mut pendientes = use_signal(|| crate::persistence::db().pending_coordinators());
     let toasts = use_toast();
 
     use_effect(move || {
@@ -54,10 +56,52 @@ pub fn PeersCard() -> Element {
                 if lista.peek().as_slice() != actuales.as_slice() {
                     lista.set(actuales);
                 }
+                let actuales_pend = crate::persistence::db().pending_coordinators();
+                if pendientes.peek().as_slice() != actuales_pend.as_slice() {
+                    pendientes.set(actuales_pend);
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
         });
     });
+
+    // Aceptar un coordinador oído: lo guarda, conecta y deja de preguntar.
+    let aceptar_coordinador = move |id: String| {
+        spawn(async move {
+            match crate::persistence::db().accept_coordinator(&id).await {
+                Ok((canonico, true)) => show_toast(
+                    toasts,
+                    format!("Coordinador {} aceptado", peer_short(&canonico)),
+                    ToastVariant::Success,
+                ),
+                Ok((canonico, false)) => show_toast(
+                    toasts,
+                    format!(
+                        "{} guardado, sin respuesta todavía (reintenta al arrancar)",
+                        peer_short(&canonico)
+                    ),
+                    ToastVariant::Info,
+                ),
+                Err(e) => show_toast(
+                    toasts,
+                    format!("No se pudo aceptar el coordinador: {e}"),
+                    ToastVariant::Error,
+                ),
+            }
+            lista.set(crate::persistence::db().peers());
+            pendientes.set(crate::persistence::db().pending_coordinators());
+        });
+    };
+
+    // Ignorar un coordinador pendiente (deja de preguntar por él esta corrida).
+    let ignorar_coordinador = move |id: String| {
+        spawn(async move {
+            if let Err(e) = crate::persistence::db().ignore_coordinator(&id) {
+                show_toast(toasts, format!("No se pudo ignorar: {e}"), ToastVariant::Error);
+            }
+            pendientes.set(crate::persistence::db().pending_coordinators());
+        });
+    };
 
     // Alta + conexión del id pegado (guardado en `peers.txt` del data dir).
     let conectar_nuevo = move |_| {
@@ -102,6 +146,36 @@ pub fn PeersCard() -> Element {
                 h5 { class: "font-medium text-[var(--text-primary)] mb-1", "Nodos pares" }
                 p { class: "mb-3 text-xs text-[var(--text-secondary)]",
                     "Los nodos de la misma red interna se descubren solos (mDNS). Para un nodo en otra red, pegá el id que muestra Ajustes en ese equipo: la sincronización va en los dos sentidos."
+                }
+                if !pendientes().is_empty() {
+                    div { class: "mb-3 rounded-lg border border-[var(--warning-color)] bg-[var(--card-bg)] p-3",
+                        div { class: "flex items-center gap-2 mb-1",
+                            i { class: "bi bi-people-fill text-[var(--warning-color)]" }
+                            p { class: "mb-0 text-sm font-medium text-[var(--text-primary)]", "Coordinador detectado" }
+                        }
+                        p { class: "mb-2 text-xs text-[var(--text-secondary)]",
+                            "Un nodo de la red se identifica como coordinador. Aceptalo para intercambiar ids y sincronizar con todo el grupo."
+                        }
+                        for id in pendientes() {
+                            div {
+                                key: "{id}",
+                                class: "flex flex-wrap items-center justify-between gap-2 border-t border-[var(--card-border)] pt-2",
+                                p { class: "mb-0 break-all text-[var(--text-primary)]", style: "font-size:0.8rem", title: "{id}", "{peer_short(&id)}" }
+                                div { class: "flex gap-2",
+                                    button {
+                                        class: "inline-flex items-center justify-center rounded bg-[var(--primary-color)] text-white hover:opacity-90 px-2.5 py-1 text-sm",
+                                        onclick: { let id = id.clone(); move |_| aceptar_coordinador(id.clone()) },
+                                        "Aceptar"
+                                    }
+                                    button {
+                                        class: "inline-flex items-center justify-center rounded border border-[var(--card-border)] text-[var(--text-secondary)] hover:bg-[var(--table-hover)] hover:text-[var(--text-primary)] px-2.5 py-1 text-sm",
+                                        onclick: { let id = id.clone(); move |_| ignorar_coordinador(id.clone()) },
+                                        "Ignorar"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 div { class: "grid grid-cols-12 gap-2 mb-3",
                     div { class: "col-span-12 sm:col-span-9",
