@@ -811,3 +811,17 @@ h6 {
     display: none;
   }
 }
+
+/* Barra indeterminada del splash de cierre. */
+@keyframes featherai-shutdown {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.featherai-shutdown-bar {
+  animation: featherai-shutdown 1.1s ease-in-out infinite;
+}

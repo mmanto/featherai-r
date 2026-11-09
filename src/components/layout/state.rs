@@ -30,16 +30,27 @@ pub fn logout(mut auth: Signal<AuthState>) {
     *auth.write() = AuthState::default();
 }
 
-/// Sale de la aplicación terminando el proceso.
+/// Señal de “la app se está cerrando”, provista por `App` por contexto.
 ///
-/// Sin barra de título no hay botón de cierre nativo, así que el cierre se
-/// dispara desde la UI. El cierre ordenado (ocultar la ventana, flush de los
-/// stores y backend Iroh, devolver el data dir al servicio del nodo) vive en
-/// [`crate::shutdown_and_exit`]: acá sólo se lo invoca con la ventana visible.
+/// Es un newtype a propósito: [`SidebarProvider`] también provee un
+/// `Signal<bool>` (el colapso del sidebar) y está **más cerca** de los ítems de
+/// usuario que el proveedor de `App`. Con `use_context::<Signal<bool>>()` el
+/// menú leía el colapso del sidebar: “Salir” colapsaba la barra y cerraba sin
+/// pintar el splash (y con el sidebar ya colapsado ni siquiera cerraba, porque
+/// `begin_shutdown` veía la señal en `true` y salía).
+#[derive(Clone, Copy)]
+pub struct Exiting(pub Signal<bool>);
+
+/// Sale de la aplicación: activa el splash de cierre y dispara el cierre
+/// ordenado (flush de los stores y backend Iroh, devolver el data dir al
+/// servicio del nodo) en un hilo aparte.
+///
+/// `exiting` lo provee `App` por contexto; `UserMenuItems` lo lee y lo pasa.
 /// Solo tiene efecto en desktop; en web/server es no-op.
-pub fn exit_app() {
+pub fn exit_app(exiting: Exiting) {
+    let _ = exiting;
     #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
-    crate::shutdown_and_exit(true);
+    crate::begin_shutdown(exiting.0);
 }
 
 /// Ícono de navegación — clase de Bootstrap Icons (mismo contrato que el

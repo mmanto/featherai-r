@@ -188,6 +188,10 @@ featherai --node                # nodo headless (es lo que arranca el servicio)
   `FEATHRAI_LOG`). Si cambiás alguna, reinstalá (`--install-service`).
 - **Rutas:** la unidad apunta al ejecutable que la instaló (en un `.AppImage`, al `.AppImage`
   en sí vía `$APPIMAGE`). Si movés o actualizás la app de ruta, reinstalá el servicio.
+- **AppImage:** la unidad agrega `APPIMAGE_EXTRACT_AND_RUN=1`. El runtime monta el squashfs por
+  FUSE y, al detener la unidad, systemd señaliza al runtime y al nodo a la vez
+  (`KillMode=control-group`): el desmontaje durante el cierre producía SIGBUS. Extraer-y-correr
+  evita el montaje y el `stop` queda limpio.
 
 Códigos de salida del nodo: `0` al detenerse por SIGTERM/SIGINT, `3` si el data dir ya está
 tomado por otra instancia o por la app (`RestartPreventExitStatus=3` evita que systemd
@@ -264,6 +268,16 @@ deja en `usr/lib/<AppName>/assets`) y re-empaqueta el AppImage; CI lo corre solo
 ```bash
 ./scripts/fix-appimage-system-webview.sh
 ```
+
+Atajo con Make:
+
+```bash
+make appimage   # bundle release + fix del WebView + copia a ~/Programas
+make clean      # borra la cache de build de featherai (cargo clean -p + $CARGO_TARGET_DIR/dx/featherai)
+```
+
+`make appimage` deja el `.AppImage` también en `~/Programas`, listo para ejecutar
+desde ahí (la ruta se cambia con `PROGRAMAS_DIR=/otra/ruta`).
 
 `dx` writes the `.deb`/`.rpm` itself (no `dpkg-deb`/`rpmbuild` needed); the
 AppImage step downloads `linuxdeploy`. `[bundle.deb].depends` declares the

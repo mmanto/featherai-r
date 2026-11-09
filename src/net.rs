@@ -118,6 +118,15 @@ const UI_DIAL: Duration = Duration::from_secs(10);
 /// repite mensajes viejos, por eso se re-anuncia.
 const GROUP_ANNOUNCE: Duration = Duration::from_secs(10);
 
+/// Lookup mDNS compartido: `None` hasta que la red permite crearlo.
+///
+/// El arranque temprano no siempre admite el join multicast; el slot lo llena
+/// el retry en segundo plano y [`Peers`] lo mantiene vivo.
+type MdnsSlot = Arc<Mutex<Option<MdnsAddressLookup>>>;
+
+/// Reintento del mDNS cuando el arranque no encontró una interfaz válida.
+const MDNS_RETRY: Duration = Duration::from_secs(5);
+
 /// Configuración de la fase de arranque de la red de pares.
 pub struct Join {
     /// Conectar los pares explícitos (`FEATHRAI_PEERS` + `peers.txt`).
@@ -259,10 +268,10 @@ pub struct Peers {
     inner: Arc<Mutex<State>>,
     client: IrohClient,
     /// Mantiene vivo al discoverer mDNS (dropear la instancia aborta su tarea).
-    /// `None` si mDNS no se pudo levantar (red sin multicast); el resto sigue.
-    mdns: Option<MdnsAddressLookup>,
-    /// Descubridor mDNS del servicio de coordinadores; `None` si no se pudo.
-    mdns_coord: Option<MdnsAddressLookup>,
+    /// Vacío si el arranque no tenía red: el retry lo llena en segundo plano.
+    mdns: MdnsSlot,
+    /// Descubridor mDNS del servicio de coordinadores; mismo criterio.
+    mdns_coord: MdnsSlot,
     /// Este nodo se identifica como coordinador (anuncia su rol).
     coordinator: bool,
     /// Suscripción al grupo por gossip (opción A). Guardarla mantiene viva la
@@ -307,7 +316,7 @@ impl Peers {
         let (mdns, mdns_coord) = if join.lan {
             start_mdns(&inner, client, join.coordinator).await
         } else {
-            (None, None)
+            (empty_mdns_slot(), empty_mdns_slot())
         };
 
         // Grupo por gossip (opción A): se une con los pares ya conocidos; un
@@ -419,7 +428,11 @@ impl Peers {
         let lan = st.lan.len();
         let group = st.group.len();
         let pendientes = st.pending_coordinators.len();
-        let mdns = if self.mdns.is_some() && self.mdns_coord.is_some() { "sí" } else { "no" };
+        let mdns = if lock_slot(&self.mdns).is_some() && lock_slot(&self.mdns_coord).is_some() {
+            "sí"
+        } else {
+            "no"
+        };
         let grupo = if self.topic.is_some() { "sí" } else { "no" };
         let coord = if self.coordinator { "sí" } else { "no" };
         format!(
@@ -507,96 +520,241 @@ async fn start_mdns(
     inner: &Arc<Mutex<State>>,
     client: &IrohClient,
     coordinator: bool,
-) -> (Option<MdnsAddressLookup>, Option<MdnsAddressLookup>) {
+) -> (MdnsSlot, MdnsSlot) {
     let endpoint = match client.backend().get_endpoint().await {
         Ok(e) => {
             let guard = e.read().await;
             match guard.as_ref() {
                 Some(ep) => ep.clone(),
-                None => return (None, None),
+                None => return (empty_mdns_slot(), empty_mdns_slot()),
             }
         }
         Err(e) => {
             warn(&format!("sin endpoint para mDNS: {e}"));
-            return (None, None);
+            return (empty_mdns_slot(), empty_mdns_slot());
         }
     };
 
-    // Miembros: los publica quien NO es coordinador; todos los escuchan.
-    let mdns = mdns_lookup(&endpoint, MDNS_SERVICE, !coordinator);
-    // Coordinadores: los publica el coordinador; todos los escuchan.
-    let mdns_coord = mdns_lookup(&endpoint, MDNS_COORDINATOR_SERVICE, coordinator);
-
     let this = client.node_id();
+    let mdns = empty_mdns_slot();
+    let mdns_coord = empty_mdns_slot();
 
-    if let Some(mdns) = &mdns {
-        let mut events = mdns.subscribe().await;
-        let inner = Arc::clone(inner);
-        let client = client.clone();
-        tokio::spawn(async move {
-            while let Some(event) = events.next().await {
-                let DiscoveryEvent::Discovered { endpoint_info, .. } = event else {
-                    continue;
-                };
-                let id = endpoint_info.endpoint_id;
-                if id == this {
-                    continue;
-                }
-                let first = {
-                    let mut st = lock(&inner);
-                    st.lan.insert(id)
-                };
-                if first {
-                    let _ = dial(&inner, &client, id, UI_DIAL).await;
-                }
-            }
-        });
+    // Miembros: los publica quien NO es coordinador; todos los escuchan.
+    if let Err(e) = install_mdns(
+        &mdns,
+        MDNS_SERVICE,
+        !coordinator,
+        MdnsRole::Member,
+        &endpoint,
+        inner,
+        client,
+        this,
+    )
+    .await
+    {
+        warn(&format!(
+            "mDNS ({MDNS_SERVICE}) no disponible: {e}; se reintenta cada {MDNS_RETRY:?}"
+        ));
+    }
+    // Coordinadores: los publica el coordinador; todos los escuchan.
+    if let Err(e) = install_mdns(
+        &mdns_coord,
+        MDNS_COORDINATOR_SERVICE,
+        coordinator,
+        MdnsRole::Coordinator,
+        &endpoint,
+        inner,
+        client,
+        this,
+    )
+    .await
+    {
+        warn(&format!(
+            "mDNS ({MDNS_COORDINATOR_SERVICE}) no disponible: {e}; \
+             se reintenta cada {MDNS_RETRY:?}"
+        ));
     }
 
-    if let Some(mdns_coord) = &mdns_coord {
-        let mut events = mdns_coord.subscribe().await;
-        let inner = Arc::clone(inner);
-        tokio::spawn(async move {
-            while let Some(event) = events.next().await {
-                let DiscoveryEvent::Discovered { endpoint_info, .. } = event else {
-                    continue;
-                };
-                let id = endpoint_info.endpoint_id;
-                if id == this {
-                    continue;
-                }
-                note_coordinator(&inner, id);
-            }
-        });
+    if lock_slot(&mdns).is_none() || lock_slot(&mdns_coord).is_none() {
+        spawn_mdns_retry(
+            Arc::clone(inner),
+            client.clone(),
+            endpoint,
+            this,
+            coordinator,
+            Arc::clone(&mdns),
+            Arc::clone(&mdns_coord),
+        );
     }
 
     (mdns, mdns_coord)
 }
 
-/// Crea, registra y devuelve un lookup mDNS para `service`; publica sólo si
-/// `advertise`. `None` si no se pudo levantar.
+fn empty_mdns_slot() -> MdnsSlot {
+    Arc::new(Mutex::new(None))
+}
+
+fn lock_slot(slot: &MdnsSlot) -> std::sync::MutexGuard<'_, Option<MdnsAddressLookup>> {
+    slot.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Qué hace el watcher con cada nodo descubierto.
+#[derive(Clone, Copy)]
+enum MdnsRole {
+    Member,
+    Coordinator,
+}
+
+/// Crea el lookup (si el slot está vacío), arranca su watcher y lo guarda.
+///
+/// `Err` sólo trae el motivo del `build`; se aplana con [`err_chain`] porque
+/// el `Display` de `AddressLookupBuilderError` es sólo `Service 'mdns' error`.
+async fn install_mdns(
+    slot: &MdnsSlot,
+    service: &'static str,
+    advertise: bool,
+    role: MdnsRole,
+    endpoint: &iroh::Endpoint,
+    inner: &Arc<Mutex<State>>,
+    client: &IrohClient,
+    this: EndpointId,
+) -> Result<(), String> {
+    if lock_slot(slot).is_some() {
+        return Ok(());
+    }
+    let mdns = mdns_lookup(endpoint, service, advertise)?;
+    spawn_mdns_watcher(&mdns, role, Arc::clone(inner), client.clone(), this).await;
+    *lock_slot(slot) = Some(mdns);
+    Ok(())
+}
+
+/// Suscribe el lookup y deja el loop de descubrimiento en su propia tarea.
+async fn spawn_mdns_watcher(
+    mdns: &MdnsAddressLookup,
+    role: MdnsRole,
+    inner: Arc<Mutex<State>>,
+    client: IrohClient,
+    this: EndpointId,
+) {
+    let mut events = mdns.subscribe().await;
+    tokio::spawn(async move {
+        while let Some(event) = events.next().await {
+            let DiscoveryEvent::Discovered { endpoint_info, .. } = event else {
+                continue;
+            };
+            let id = endpoint_info.endpoint_id;
+            if id == this {
+                continue;
+            }
+            match role {
+                MdnsRole::Member => {
+                    let first = {
+                        let mut st = lock(&inner);
+                        st.lan.insert(id)
+                    };
+                    if first {
+                        let _ = dial(&inner, &client, id, UI_DIAL).await;
+                    }
+                }
+                MdnsRole::Coordinator => note_coordinator(&inner, id),
+            }
+        }
+    });
+}
+
+/// Reintenta los lookups que el arranque no pudo crear.
+///
+/// Sin esto, un nodo que arranca antes de que la red esté lista (servicio al
+/// iniciar sesión) se queda sin descubrimiento LAN para toda la corrida. Los
+/// fallos del retry no se loguean para no inundar el journal: sólo la
+/// transición a activo.
+fn spawn_mdns_retry(
+    inner: Arc<Mutex<State>>,
+    client: IrohClient,
+    endpoint: iroh::Endpoint,
+    this: EndpointId,
+    coordinator: bool,
+    mdns: MdnsSlot,
+    mdns_coord: MdnsSlot,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(MDNS_RETRY).await;
+            // El guard no puede cruzar el `.await` (no es `Send`).
+            let falta_miembro = lock_slot(&mdns).is_none();
+            if falta_miembro
+                && install_mdns(
+                    &mdns,
+                    MDNS_SERVICE,
+                    !coordinator,
+                    MdnsRole::Member,
+                    &endpoint,
+                    &inner,
+                    &client,
+                    this,
+                )
+                .await
+                .is_ok()
+            {
+                warn(&format!("mDNS ({MDNS_SERVICE}) activo tras reintento"));
+            }
+            let falta_coord = lock_slot(&mdns_coord).is_none();
+            if falta_coord
+                && install_mdns(
+                    &mdns_coord,
+                    MDNS_COORDINATOR_SERVICE,
+                    coordinator,
+                    MdnsRole::Coordinator,
+                    &endpoint,
+                    &inner,
+                    &client,
+                    this,
+                )
+                .await
+                .is_ok()
+            {
+                warn(&format!(
+                    "mDNS ({MDNS_COORDINATOR_SERVICE}) activo tras reintento"
+                ));
+            }
+            if lock_slot(&mdns).is_some() && lock_slot(&mdns_coord).is_some() {
+                break;
+            }
+        }
+    });
+}
+
+/// Crea y registra un lookup mDNS para `service`; publica sólo si `advertise`.
 fn mdns_lookup(
     endpoint: &iroh::Endpoint,
     service: &str,
     advertise: bool,
-) -> Option<MdnsAddressLookup> {
-    let mdns = match MdnsAddressLookup::builder()
+) -> Result<MdnsAddressLookup, String> {
+    let mdns = MdnsAddressLookup::builder()
         .service_name(service)
         .advertise(advertise)
         .build(endpoint.id())
-    {
-        Ok(m) => m,
-        Err(e) => {
-            warn(&format!("mDNS ({service}) no disponible: {e}"));
-            return None;
-        }
-    };
+        .map_err(|e| err_chain(&e))?;
     // Registrar publica las direcciones locales actuales en el servicio.
     match endpoint.address_lookup() {
         Ok(services) => services.add(mdns.clone()),
         Err(e) => warn(&format!("mDNS ({service}) sin publicación: {e}")),
     }
-    Some(mdns)
+    Ok(mdns)
+}
+
+/// Cadena de errores en una línea: el `Display` de
+/// `AddressLookupBuilderError` es `Service 'mdns' error` y descarta el
+/// `source` (`Cannot bind to IPv4 or IPv6`), que es el dato útil.
+fn err_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut texto = error.to_string();
+    let mut fuente = error.source();
+    while let Some(e) = fuente {
+        texto.push_str(": ");
+        texto.push_str(&e.to_string());
+        fuente = e.source();
+    }
+    texto
 }
 
 /// Únete al grupo de pares por gossip (opción A: coordinador/rendezvous).
@@ -807,4 +965,40 @@ fn warn(msg: &str) {
 /// Lock del estado, sin propagar el veneno: el estado es un caché de ids.
 fn lock(inner: &Arc<Mutex<State>>) -> std::sync::MutexGuard<'_, State> {
     inner.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::err_chain;
+
+    #[derive(Debug)]
+    struct Causa;
+    impl std::fmt::Display for Causa {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Cannot bind to IPv4 or IPv6")
+        }
+    }
+    impl std::error::Error for Causa {}
+
+    #[derive(Debug)]
+    struct Envoltorio(Causa);
+    impl std::fmt::Display for Envoltorio {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Service 'mdns' error")
+        }
+    }
+    impl std::error::Error for Envoltorio {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// El `Display` del error de iroh descarta el `source`; el log no.
+    #[test]
+    fn err_chain_incluye_el_source_que_el_display_oculta() {
+        assert_eq!(
+            err_chain(&Envoltorio(Causa)),
+            "Service 'mdns' error: Cannot bind to IPv4 or IPv6"
+        );
+    }
 }

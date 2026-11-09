@@ -4,6 +4,7 @@
 pub mod confirm_dialog;
 pub mod layout;
 pub mod protected_route;
+pub mod splash;
 pub mod theme;
 #[allow(dead_code)] // show_toast/ToastVariant se conservan por contrato del port de gestion.ar
 pub mod toast;

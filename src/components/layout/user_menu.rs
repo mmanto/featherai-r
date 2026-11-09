@@ -1,4 +1,6 @@
-use crate::components::layout::state::{exit_app, logout, use_auth, use_current_path};
+use crate::components::layout::state::{
+    Exiting, exit_app, logout, use_auth, use_current_path,
+};
 use crate::components::theme::{use_theme, ThemeId};
 use dioxus::prelude::*;
 
@@ -15,6 +17,7 @@ pub fn UserMenuItems(on_action: EventHandler<()>) -> Element {
     let auth = use_auth();
     let mut theme = use_theme();
     let navigator = use_navigator();
+    let exiting = use_context::<Exiting>();
 
     let user = auth.read().user.clone();
     let username = user
@@ -82,7 +85,7 @@ pub fn UserMenuItems(on_action: EventHandler<()>) -> Element {
                 class: "dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-sm text-[var(--danger-color)] hover:bg-[var(--bg-secondary)]",
                 onclick: move |_| {
                     on_action.call(());
-                    exit_app();
+                    exit_app(exiting);
                 },
                 i { class: "bi bi-power me-2" }
                 "Salir"

@@ -192,19 +192,37 @@ pub const SERVICE_ENV_VARS: &[&str] = &[
 ];
 
 /// Las variables de [`SERVICE_ENV_VARS`] que esta corrida tiene definidas y no
-/// vacías, en ese orden.
+/// vacías, en ese orden, más `APPIMAGE_EXTRACT_AND_RUN=1` si el ejecutable es
+/// una AppImage.
 ///
 /// Es lo que hace que el nodo abra **la misma** base que la app: si el usuario
 /// corre con `FEATHRAI_DATA_DIR`, el servicio tiene que heredarlo.
 #[cfg(any(target_os = "linux", test))]
 pub fn service_env() -> Vec<(String, String)> {
-    SERVICE_ENV_VARS
+    service_env_with(std::env::var_os("APPIMAGE"))
+}
+
+/// [`service_env`] con `$APPIMAGE` ya resuelto (puro, para tests).
+///
+/// Una AppImage monta el squashfs por FUSE. Al detener la unidad, systemd usa
+/// `KillMode=control-group` y manda SIGTERM al runtime y al nodo a la vez: el
+/// runtime desmonta mientras el nodo todavía cierra la base y el proceso muere
+/// con SIGBUS (`BUS_ADRERR`) al tocar páginas mapeadas del montaje.
+/// `APPIMAGE_EXTRACT_AND_RUN=1` extrae y corre sin FUSE, así el stop queda
+/// limpio (verificado con `systemctl stop` sobre una unidad transitoria).
+#[cfg(any(target_os = "linux", test))]
+fn service_env_with(appimage: Option<std::ffi::OsString>) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = SERVICE_ENV_VARS
         .iter()
         .filter_map(|clave| {
             let valor = std::env::var(clave).ok()?;
             (!valor.trim().is_empty()).then(|| ((*clave).to_string(), valor))
         })
-        .collect()
+        .collect();
+    if appimage.is_some_and(|valor| !valor.is_empty()) {
+        env.push(("APPIMAGE_EXTRACT_AND_RUN".to_string(), "1".to_string()));
+    }
+    env
 }
 
 /// Ruta citada para la línea `ExecStart`: entre comillas si tiene espacios.
@@ -382,6 +400,26 @@ mod tests {
         assert!(
             err.contains(&format!("({} caracteres)", accion.chars().count())),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn service_env_extrae_y_corre_las_appimage() {
+        use std::ffi::OsString;
+
+        let con = service_env_with(Some(OsString::from(
+            "/home/x/featherai_0.3.2_x86_64.AppImage",
+        )));
+        assert!(
+            con.iter()
+                .any(|(clave, valor)| clave == "APPIMAGE_EXTRACT_AND_RUN" && valor == "1"),
+            "{con:?}"
+        );
+        let sin = service_env_with(None);
+        assert!(
+            !sin.iter()
+                .any(|(clave, _)| clave == "APPIMAGE_EXTRACT_AND_RUN"),
+            "{sin:?}"
         );
     }
 
